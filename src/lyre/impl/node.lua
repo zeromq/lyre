@@ -343,12 +343,18 @@ function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups,
   peer:set_want_sequence(sequence)
   peer:set_name(name)
 
-  for group_name in pairs(groups) do
-    node:join_peer_group(peer, group_name)
+  for key, val in pairs(headers) do
+    peer:set_header(key, val)
   end
 
-  for key, val in pairs(headers) do
-    peer:set_header(key, valu)
+  -- Tell the caller about the peer
+  node:send("ENTER", peer:uuid(true), peer:name(), 
+    "", -- peer:headers() -- @todo pack headers hash
+    peer:endpoint()
+  )
+
+  for group_name in pairs(groups) do
+    node:join_peer_group(peer, group_name)
   end
 
   log.info("New peer ready ", peer:uuid(true), " ", name, " ", endpoint)
@@ -404,13 +410,14 @@ function MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
   local peer = find_peer(node, version, uuid, sequence)
   if not peer then return end
 
-  node:send("SHOUT", unpack(content))
+  node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
 end
 
 function MessageProcessor.WHISPER(node, version, uuid, sequence, group, content)
   local peer = find_peer(node, version, uuid, sequence)
   if not peer then return end
 
+  node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
 end
 
 end
@@ -1082,6 +1089,9 @@ function Node:join_peer_group(peer, name)
   local group = p.peer_groups[name] or Group:new(name)
   p.peer_groups[name] = group
   group:join(peer)
+
+  self:send("JOIN", peer:uuid(true), peer:name(), name)
+
   return group
 end
 
@@ -1090,6 +1100,9 @@ function Node:leave_peer_group(peer, name)
   local group = p.peer_groups[name]
   if not group then return true end
   group:leave(peer)
+
+  self:send("JOIN", peer:uuid(true), peer:name(), name)
+
   return true
 end
 
@@ -1181,7 +1194,10 @@ function Node:remove_peer(peer)
   for id, group in pairs(p.peer_groups) do
     group:leave(peer)
   end
-  p.peers[peer:uuid()] = nil
+  if p.peers[peer:uuid()] then
+    self:send("EXIT", peer:uuid(true), peer:name())
+    p.peers[peer:uuid()] = nil
+  end
   return peer
 end
 

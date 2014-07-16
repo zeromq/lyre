@@ -3,7 +3,7 @@ local Lyre  = require "Lyre"
 
 local name = arg[1]
 if not name then
-  print("usage:"
+  print("usage:")
   print("  lyrechat name")
 end
 
@@ -19,7 +19,7 @@ assert(node
 loop = zloop.new()
 
 loop:add_socket(node, function(s)
-  node:recv()
+  print(node:recv())
 end)
 
 loop:add_interval(5000, function()
