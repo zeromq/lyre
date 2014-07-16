@@ -19,7 +19,6 @@ local Message  = require "lyre.impl.message"
 local bit      = utils.bit
 local Iter     = utils.Iter
 local Buffer   = utils.Buffer
-local count, pack = utils.count, utils.pack
 local MessageDecoder, MessageEncoder = Message.decoder, Message.encoder
 
 ---------------------------------------------------------------------

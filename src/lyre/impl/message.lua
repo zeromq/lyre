@@ -5,7 +5,8 @@ local ZRE      = require "lyre.zre"
 local bit      = utils.bit
 local Iter     = utils.Iter
 local Buffer   = utils.Buffer
-local count, pack = utils.count, utils.pack
+local count    = utils.count
+local unpack   = utils.unpack
 
 ---------------------------------------------------------------------
 local Message = {} do
