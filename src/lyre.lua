@@ -52,7 +52,7 @@ function Node:new(ctx)
   end
 
   local o = setmetatable({},self)
-  
+
   o._private = {
     actor = actor;
     inbox = inbox;

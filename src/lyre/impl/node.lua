@@ -16,36 +16,9 @@ local zthreads = require "lzmq.threads"
 local uuid     = require "uuid"
 local bit      = require "bit32"
 local LogLib   = require "log"
+local UUID     = require "lyre.impl.uuid"
 
 local unpack   = unpack or table.unpack
-
-local function StrUuidToBin(u)
-  assert(#u == 36)
-  return (string.gsub(u, "([^-][^-])%-?",function(ch)
-    return string.char(tonumber(ch, 16))
-  end))
-end
-
-local function Hex(s)
-  return (string.gsub(s, ".",function(ch)
-    return string.format("%.2x",string.byte(ch))
-  end))
-end
-
-local function BinUuidToStr(u)
-  assert(#u == 16)
-  return (string.gsub(u, "^(....)(..)(..)(..)(......)$", function(a,b,c,d,e)
-    return Hex(a) .. "-" .. Hex(b) .. "-" .. Hex(c) .. "-" .. Hex(d) .. "-" .. Hex(e)
-  end))
-end
-
-local function NewStrUuid()
-  return uuid.new()
-end
-
-local function NewBinUuid()
-  return StrUuidToBin(uuid.new())
-end
 
 local function count(t)
   local n = 0
@@ -198,7 +171,8 @@ end
 local ZRE_DISCOVERY_PORT = 5670
 local ZRE_VERSION        = 1
 local ZRE_PREFIX         = "ZRE" .. string.char(ZRE_VERSION)
-local ZRE_ANN_SIZE       = #ZRE_PREFIX + 16 + 2 -- UUID + PORT
+local ZRE_UUID_LEN       = UUID.LEN
+local ZRE_ANN_SIZE       = #ZRE_PREFIX + ZRE_UUID_LEN + 2 -- UUID + PORT
 local ZRE_SIGNATURE      = string.char(0xAA) .. string.char(0xA0)
 local ZRE_COMMANDS       = {
   HELLO     = 1;
@@ -210,7 +184,6 @@ local ZRE_COMMANDS       = {
   PING_OK   = 7;
 }
 local ZRE_COMMANDS_NAME  = {} for k, v in pairs(ZRE_COMMANDS) do ZRE_COMMANDS_NAME[v] = k end
-local ZRE_UUID_LEN       = 16
 
 --  Constants, to be configured/reviewed
 local PEER_EVASIVE       = 3000   --  3 seconds' silence is evasive
@@ -366,7 +339,7 @@ local function find_peer(node, version, uuid, sequence)
   local log  = node:logger()
   local peer = node:find_peer(uuid)
   if not peer then
-    log.warning("Unknown peer: ", BinUuidToStr(uuid))
+    log.warning("Unknown peer: ", UUID.to_string(uuid))
     return
   end
 
@@ -532,9 +505,10 @@ Peer.__index = Peer
 
 function Peer:new(uuid)
   local o = setmetatable({}, self)
+  uuid = UUID.new(uuid)
   o._private = {
     uuid          = uuid;
-    name          = BinUuidToStr(uuid):sub(1, 6);
+    name          = uuid:str():sub(1, 6);
     version       = 2;
     sent_sequence = 0;
     want_sequence = 0;
@@ -653,8 +627,8 @@ function Peer:set_name(name)
 end
 
 function Peer:uuid(as_str)
-  if as_str then return BinUuidToStr(self._private.uuid) end
-  return self._private.uuid
+  if as_str then return self._private.uuid:str() end
+  return self._private.uuid:bin()
 end
 
 function Peer:headers()
@@ -700,7 +674,7 @@ local function Node_on_beacon(self, beacon)
   if port > 0 then
     local endpoint = "tcp://" .. host .. ":" .. port
 
-    log.trace("BEACON: ", BinUuidToStr(uuid), endpoint)
+    log.trace("BEACON: ", UUID.to_string(uuid), endpoint)
 
     self:require_peer(uuid, endpoint)
   else
@@ -731,11 +705,11 @@ local function Node_on_inbox(self, inbox)
 
   local name = ZRE_COMMANDS_NAME[cmd]
   if not name then
-    log.alert("Unknown command ", cmd, " from ", BinUuidToStr(uuid))
+    log.alert("Unknown command ", cmd, " from ", UUID.to_string(uuid))
     return
   end
 
-  log.notice("INBOX : ", BinUuidToStr(uuid), name, "#", sequence)
+  log.notice("INBOX : ", UUID.to_string(uuid), name, "#", sequence)
 
   local fn = MessageDecoder[name]
   if fn then fn(self, version, uuid, sequence, iter, content) end
@@ -866,7 +840,7 @@ end
 function Node:new(pipe, outbox)
   local ctx = zmq.assert(zthreads.context())
 
-  local uuid        = NewBinUuid();
+  local uuid = UUID.new()
 
   local LYRE_MYIP = LYRE_MYIP or os.getenv("LYRE_MYIP")
 
@@ -881,7 +855,7 @@ function Node:new(pipe, outbox)
     inbox    = inbox;        -- other nodes connect to
     outbox   = outbox;       -- events to user API
     uuid     = uuid;         -- 
-    name     = BinUuidToStr(uuid):sub(1,6);
+    name     = uuid:str():sub(1,6);
     loop     = loop;
     groups   = {};
     status   = 0;
@@ -1072,8 +1046,8 @@ function Node:set_name(name)
 end
 
 function Node:uuid(str)
-  if str then return BinUuidToStr(self._private.uuid) end
-  return self._private.uuid
+  if str then return self._private.uuid:str() end
+  return self._private.uuid:bin()
 end
 
 function Node:endpoint()
@@ -1152,7 +1126,7 @@ function Node:require_peer(uuid, endpoint)
 
   local peer = p.peers[uuid]
   if not peer then
-    log.info("New peer detected: ", BinUuidToStr(uuid), endpoint)
+    log.info("New peer detected: ", UUID.to_string(uuid), endpoint)
     for u, pp in pairs(p.peers) do
       if pp:endpoint() == endpoint then
         log.warning('Found peer with same endpoint:', pp:uuid(true), ". Remove it")
