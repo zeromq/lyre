@@ -1,176 +1,28 @@
---
--- Install
---  luarocks install luuid
---  luarocks install bit32
---  luarocks install lua-log
---  luarocks install luasocket
---  luarocks install lua-llthreads2
---  luarocks install lzmq
---  luarocks install lzmq-beacon --server=http://rocks.moonscript.org/dev
+---------------------------------------------------------------------
+--  Constants, to be configured/reviewed
+local PEER_EVASIVE       = 3000   --  3 seconds' silence is evasive
+local PEER_EXPIRED       = 5000   --  5 seconds' silence is expired
+local REAP_INTERVAL      = 1000   --  Once per second
+---------------------------------------------------------------------
 
 local zmq      = require "lzmq"
 local zloop    = require "lzmq.loop"
 local ztimer   = require "lzmq.timer"
 local zbeacon  = require "lzmq.beacon"
 local zthreads = require "lzmq.threads"
-local uuid     = require "uuid"
-local bit      = require "bit32"
 local LogLib   = require "log"
 local UUID     = require "lyre.impl.uuid"
-
-local unpack   = unpack or table.unpack
-
-local function count(t)
-  local n = 0
-  for _ in pairs(t) do n = n + 1 end
-  return n
-end
-
----------------------------------------------------------------------
-local Iter = {} do
-Iter.__index = Iter
-
--- Get a 1-byte number from the frame
-local function GET_NUMBER1(data, pos)
-  return data:sub(pos, pos):byte(), pos + 1
-end
-
--- Get a 2-byte number from the frame
-local function GET_NUMBER2(data, pos)
-  return bit.bor(
-    bit.lshift(data:sub(pos + 0, pos + 0):byte(),  8),
-               data:sub(pos + 1, pos + 1):byte()
-  ), pos + 2
-end
-
--- Get a 4-byte number from the frame
-local function GET_NUMBER4(data, pos)
-  return bit.bor(
-    bit.lshift(data:sub(pos + 0, pos + 0):byte(), 24),
-    bit.lshift(data:sub(pos + 1, pos + 1):byte(), 16),
-    bit.lshift(data:sub(pos + 2, pos + 2):byte(),  8),
-               data:sub(pos + 3, pos + 3):byte()
-  ), pos + 4
-end
-
--- Get a sequence of bytes
-local function GET_BYTES(data, len, pos)
-  local s = (data:sub(pos, pos + len - 1))
-  return s, pos + len
-end
-
-function Iter:new(data)
-  return setmetatable({_data = data, _pos = 1, _len = #data}, self)
-end
-
-function Iter:has(n)
-  return (self._len - self._pos + 1) >= n
-end
-
-function Iter:next_uint8()
-  if not self:has(1) then return end
-
-  local val
-  val, self._pos = GET_NUMBER1(self._data, self._pos)
-  return val
-end
-
-function Iter:next_uint16()
-  if not self:has(2) then return end
-
-  local val
-  val, self._pos = GET_NUMBER2(self._data, self._pos)
-  return val
-end
-
-function Iter:next_uint32()
-  if not self:has(4) then return end
-
-  local val
-  val, self._pos = GET_NUMBER4(self._data, self._pos)
-  return val
-end
-
-function Iter:next_bytes(n)
-  if not self:has(n) then return end
-
-  local val
-  val, self._pos = GET_BYTES(self._data, n, self._pos)
-  return val
-end
-
-function Iter:next_string()
-  local len = self:next_uint8()
-  if not len then return end
-  return self:next_bytes(len)
-end
-
-function Iter:next_longstr()
-  local len = self:next_uint32()
-  if not len then return end
-  return self:next_bytes(len)
-end
-
-end
----------------------------------------------------------------------
-
----------------------------------------------------------------------
-local Buffer = {} do
-Buffer.__index = Buffer
-
-function Buffer:new()
-  return setmetatable({_data = {}}, self)
-end
-
-function Buffer:write_bytes(v)
-  self._data[#self._data + 1] = v
-  return self
-end
-
-function Buffer:write_uint8(v)
-  self._data[#self._data + 1] = string.char(bit.band(v, 0xFF))
-  return self
-end
-
-function Buffer:write_uint16(v)
-  self._data[#self._data + 1] = 
-    string.char(bit.band(bit.rshift(v, 8), 0xFF)) .. 
-    string.char(bit.band(           v,     0xFF))
-  return self
-end
-
-function Buffer:write_uint32(v)
-  self._data[#self._data + 1] = 
-    string.char(bit.band(bit.rshift(v, 24), 0xFF)) .. 
-    string.char(bit.band(bit.rshift(v, 16), 0xFF)) .. 
-    string.char(bit.band(bit.rshift(v, 8 ), 0xFF)) .. 
-    string.char(bit.band(           v,      0xFF))
-  return self
-end
-
-function Buffer:write_string(val)
-  self:write_uint8(#val)
-  self:write_bytes(val)
-  return self
-end
-
-function Buffer:write_longstr(val)
-  self:write_uint32(#val)
-  self:write_bytes(val)
-  return self
-end
-
-function Buffer:data()
-  return table.concat(self._data)
-end
-
-end
----------------------------------------------------------------------
+local utils    = require "lyre.impl.utils"
+local bit      = utils.bit
+local Iter     = utils.Iter
+local Buffer   = utils.Buffer
+local count, pack = utils.count, utils.pack
 
 -- ZRE Constants
 local ZRE_DISCOVERY_PORT = 5670
-local ZRE_VERSION        = 1
-local ZRE_PREFIX         = "ZRE" .. string.char(ZRE_VERSION)
+local ZRE_BEACIN_VERSION = 1
+local ZRE_VERSION        = 2
+local ZRE_PREFIX         = "ZRE" .. string.char(ZRE_BEACIN_VERSION)
 local ZRE_UUID_LEN       = UUID.LEN
 local ZRE_ANN_SIZE       = #ZRE_PREFIX + ZRE_UUID_LEN + 2 -- UUID + PORT
 local ZRE_SIGNATURE      = string.char(0xAA) .. string.char(0xA0)
@@ -184,11 +36,6 @@ local ZRE_COMMANDS       = {
   PING_OK   = 7;
 }
 local ZRE_COMMANDS_NAME  = {} for k, v in pairs(ZRE_COMMANDS) do ZRE_COMMANDS_NAME[v] = k end
-
---  Constants, to be configured/reviewed
-local PEER_EVASIVE       = 3000   --  3 seconds' silence is evasive
-local PEER_EXPIRED       = 5000   --  5 seconds' silence is expired
-local REAP_INTERVAL      = 1000   --  Once per second
 
 ---------------------------------------------------------------------
 local MessageEncoder = {} do
@@ -206,7 +53,7 @@ function Message:new(id, header, content)
 end
 
 function Message:send(peer, s)
-  local header = Buffer:new()
+  local header = Buffer()
     :write_bytes(ZRE_SIGNATURE)
     :write_uint8(self._id)
     :write_uint8(peer:version())
@@ -237,7 +84,7 @@ end
 ---------------------------------------------------------------------
 
 function MessageEncoder.HELLO(node)
-  local buf = Buffer:new()
+  local buf = Buffer()
     :write_string(node:endpoint())
     :write_uint32(count(node:groups()))
 
@@ -268,7 +115,7 @@ function MessageEncoder.PING_OK(node)
 end
 
 function MessageEncoder.JOIN(node, group)
-  local buf = Buffer:new()
+  local buf = Buffer()
     :write_string(group)
     :write_uint8(node:status())
 
@@ -276,7 +123,7 @@ function MessageEncoder.JOIN(node, group)
 end
 
 function MessageEncoder.LEAVE(node, group)
-  local buf = Buffer:new()
+  local buf = Buffer()
     :write_string(group)
     :write_uint8(node:status())
 
@@ -284,7 +131,7 @@ function MessageEncoder.LEAVE(node, group)
 end
 
 function MessageEncoder.SHOUT(node, group, content)
-  local buf = Buffer:new()
+  local buf = Buffer()
     :write_string(group)
 
   return Message:new(ZRE_COMMANDS.SHOUT, buf:data(), content)
@@ -666,7 +513,7 @@ local function Node_on_beacon(self, beacon)
   if not host                               then return end
   if #ann ~= ZRE_ANN_SIZE                   then return end
 
-  local iter = Iter:new(ann)
+  local iter = Iter(ann)
   if iter:next_bytes(#ZRE_PREFIX ) ~= ZRE_PREFIX then return end
   local uuid = iter:next_bytes(ZRE_UUID_LEN)
   local port = iter:next_uint16()
@@ -697,11 +544,11 @@ local function Node_on_inbox(self, inbox)
 
   local uuid     = routing_id:sub(2)
 
-  local iter = Iter:new(msg)
-  if iter:next_bytes(#ZRE_SIGNATURE) ~= ZRE_SIGNATURE   then return end
-  local cmd      = iter:next_uint8()  if not cmd        then return end
-  local version  = iter:next_uint8()  if version ~= 2   then return end
-  local sequence = iter:next_uint16() if not sequence   then return end
+  local iter = Iter(msg)
+  if iter:next_bytes(#ZRE_SIGNATURE) ~= ZRE_SIGNATURE           then return end
+  local cmd      = iter:next_uint8()  if not cmd                then return end
+  local version  = iter:next_uint8()  if version ~= ZRE_VERSION then return end
+  local sequence = iter:next_uint16() if not sequence           then return end
 
   local name = ZRE_COMMANDS_NAME[cmd]
   if not name then
@@ -935,7 +782,7 @@ function Node:start()
 
     local endpoint = ("tcp://%s:%d"):format(host, port)
 
-    local buf = Buffer:new()
+    local buf = Buffer()
       :write_bytes(ZRE_PREFIX)
       :write_bytes(self:uuid())
       :write_uint16(port)
@@ -966,7 +813,7 @@ function Node:stop()
   local p = self._private
 
   if p.beacon then
-    p.beacon:publish(Buffer:new()
+    p.beacon:publish(Buffer()
       :write_bytes(ZRE_PREFIX)
       :write_bytes(self:uuid())
       :write_uint16(0)
