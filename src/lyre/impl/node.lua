@@ -13,297 +13,14 @@ local zthreads = require "lzmq.threads"
 local LogLib   = require "log"
 local UUID     = require "lyre.impl.uuid"
 local utils    = require "lyre.impl.utils"
+local ZRE      = require "lyre.zre"
+local Message  = require "lyre.impl.message"
+
 local bit      = utils.bit
 local Iter     = utils.Iter
 local Buffer   = utils.Buffer
 local count, pack = utils.count, utils.pack
-
--- ZRE Constants
-local ZRE_DISCOVERY_PORT = 5670
-local ZRE_BEACIN_VERSION = 1
-local ZRE_VERSION        = 2
-local ZRE_PREFIX         = "ZRE" .. string.char(ZRE_BEACIN_VERSION)
-local ZRE_UUID_LEN       = UUID.LEN
-local ZRE_ANN_SIZE       = #ZRE_PREFIX + ZRE_UUID_LEN + 2 -- UUID + PORT
-local ZRE_SIGNATURE      = string.char(0xAA) .. string.char(0xA0)
-local ZRE_COMMANDS       = {
-  HELLO     = 1;
-  WHISPER   = 2;
-  SHOUT     = 3;
-  JOIN      = 4;
-  LEAVE     = 5;
-  PING      = 6;
-  PING_OK   = 7;
-}
-local ZRE_COMMANDS_NAME  = {} for k, v in pairs(ZRE_COMMANDS) do ZRE_COMMANDS_NAME[v] = k end
-
----------------------------------------------------------------------
-local MessageEncoder = {} do
-
----------------------------------------------------------------------
-local Message = {} do
-Message.__index = Message
-
-function Message:new(id, header, content)
-  return setmetatable({
-    _id      = id,
-    _header  = header,
-    _content = content,
-  }, self)
-end
-
-function Message:send(peer, s)
-  local header = Buffer()
-    :write_bytes(ZRE_SIGNATURE)
-    :write_uint8(self._id)
-    :write_uint8(peer:version())
-    :write_uint16(peer:next_sent_sequence())
-
-  if self._header then
-    header:write_bytes(self._header)
-  end
-
-  header = header:data()
-
-  if not self._content then
-    return s:send(header)
-  end
-
-  local ok, err = s:send_more(header)
-  if not ok then return nil, err end
-
-  if type(self._content) == "string" then
-    return s:send(self._content)
-  end
-
-  assert(type(self._content) == "table")
-  return s:send_all(self._content)
-end
-
-end
----------------------------------------------------------------------
-
-function MessageEncoder.HELLO(node)
-  local buf = Buffer()
-    :write_string(node:endpoint())
-    :write_uint32(count(node:groups()))
-
-  for name in pairs(node:groups()) do
-    buf:write_longstr(name)
-  end
-
-  buf
-    :write_uint8(node:status())
-    :write_string(node:name())
-    :write_uint32(count(node:headers()))
-
-  for k, v in pairs(node:headers()) do
-    buf
-      :write_string(k)
-      :write_longstr(v)
-  end
-
-  return Message:new(ZRE_COMMANDS.HELLO, buf:data())
-end
-
-function MessageEncoder.PING(node)
-  return Message:new(ZRE_COMMANDS.PING)
-end
-
-function MessageEncoder.PING_OK(node)
-  return Message:new(ZRE_COMMANDS.PING_OK)
-end
-
-function MessageEncoder.JOIN(node, group)
-  local buf = Buffer()
-    :write_string(group)
-    :write_uint8(node:status())
-
-  return Message:new(ZRE_COMMANDS.JOIN, buf:data())
-end
-
-function MessageEncoder.LEAVE(node, group)
-  local buf = Buffer()
-    :write_string(group)
-    :write_uint8(node:status())
-
-  return Message:new(ZRE_COMMANDS.LEAVE, buf:data())
-end
-
-function MessageEncoder.SHOUT(node, group, content)
-  local buf = Buffer()
-    :write_string(group)
-
-  return Message:new(ZRE_COMMANDS.SHOUT, buf:data(), content)
-end
-
-function MessageEncoder.WHISPER(node, content)
-  return Message:new(ZRE_COMMANDS.WHISPER, nil, content)
-end
-
-end
----------------------------------------------------------------------
-
----------------------------------------------------------------------
-local MessageProcessor = {} do
-
-function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
-  local log  = node:logger()
-  local peer = assert(node:require_peer(uuid, endpoint))
-
-  if peer:ready() then
-    log.alert("Get duplicate HELLO messge from ", peer:uuid(true), " ", name, " ", endpoint)
-    node:remove_peer(peer):disconnect()
-    return
-  end
-
-  -- Or we can force check 
-  -- assert(sequence == 1)
-
-  peer:set_want_sequence(sequence)
-  peer:set_name(name)
-
-  for key, val in pairs(headers) do
-    peer:set_header(key, val)
-  end
-
-  -- Tell the caller about the peer
-  node:send("ENTER", peer:uuid(true), peer:name(), 
-    "", -- peer:headers() -- @todo pack headers hash
-    peer:endpoint()
-  )
-
-  for group_name in pairs(groups) do
-    node:join_peer_group(peer, group_name)
-  end
-
-  log.info("New peer ready ", peer:uuid(true), " ", name, " ", endpoint)
-
-  peer:set_ready(true)
-end
-
-local function find_peer(node, version, uuid, sequence)
-  local log  = node:logger()
-  local peer = node:find_peer(uuid)
-  if not peer then
-    log.warning("Unknown peer: ", UUID.to_string(uuid))
-    return
-  end
-
-  if peer:next_want_sequence() ~= sequence then
-    node:remove_peer(peer):disconnect()
-    log.warning("Invalid message sequence. Expected ", peer:next_want_sequence(0), " Got:", sequence)
-    return
-  end
-
-  return peer
-end
-
-function MessageProcessor.PING(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  peer:send(MessageEncoder.PING_OK(node))
-end
-
-function MessageProcessor.PING_OK(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-end
-
-function MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:join_peer_group(peer, group)
-end
-
-function MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:leave_peer_group(peer, group)
-end
-
-function MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
-end
-
-function MessageProcessor.WHISPER(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
-end
-
-end
----------------------------------------------------------------------
-
----------------------------------------------------------------------
-local MessageDecoder = {} do
-
-function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
-  local endpoint  = iter:next_string() if not endpoint   then return end
-
-  local list_size = iter:next_uint32() if not list_size  then return end
-  local groups = {}
-  for i = 1, list_size do
-    local elem = iter:next_longstr()   if not elem       then return end
-    groups[elem] = true
-  end
-
-  local status   = iter:next_uint8()   if not status     then return end
-  local name     = iter:next_string()  if not name       then return end
-
-  local hash_size = iter:next_uint32() if not hash_size  then return end
-  local headers = {}
-  for i = 1, hash_size do
-    local key   = iter:next_string()   if not key        then return end
-    local value = iter:next_longstr()  if not value      then return end
-    headers[key] = value
-  end
-
-  return MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
-end
-
-function MessageDecoder.PING(node, version, uuid, sequence)
-  return MessageProcessor.PING(node, version, uuid, sequence)
-end
-
-function MessageDecoder.PING_OK(node, version, uuid, sequence)
-  return MessageProcessor.PING_OK(node, version, uuid, sequence)
-end
-
-function MessageDecoder.JOIN(node, version, uuid, sequence, iter)
-  local group  = iter:next_string() if not group  then return end
-  local status = iter:next_uint8()  if not status then return end
-
-  return MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
-end
-
-function MessageDecoder.LEAVE(node, version, uuid, sequence, iter)
-  local group  = iter:next_string() if not group  then return end
-  local status = iter:next_uint8()  if not status then return end
-
-  return MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
-end
-
-function MessageDecoder.SHOUT(node, version, uuid, sequence, iter, content)
-  local group = iter:next_string() if not group  then return end
-
-  return MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
-end
-
-function MessageDecoder.WHISPER(node, version, uuid, sequence, iter, content)
-  return MessageProcessor.WHISPER(node, version, uuid, sequence, content)
-end
-
-end
----------------------------------------------------------------------
+local MessageDecoder, MessageEncoder = Message.decoder, Message.encoder
 
 ---------------------------------------------------------------------
 local Group = {} do
@@ -511,11 +228,11 @@ local function Node_on_beacon(self, beacon)
   local host, ann = beacon:recv()
 
   if not host                               then return end
-  if #ann ~= ZRE_ANN_SIZE                   then return end
+  if #ann ~= ZRE.ANN_SIZE                   then return end
 
   local iter = Iter(ann)
-  if iter:next_bytes(#ZRE_PREFIX ) ~= ZRE_PREFIX then return end
-  local uuid = iter:next_bytes(ZRE_UUID_LEN)
+  if iter:next_bytes(#ZRE.BEACON_PREFIX) ~= ZRE.BEACON_PREFIX then return end
+  local uuid = iter:next_bytes(UUID.LEN)
   local port = iter:next_uint16()
 
   if port > 0 then
@@ -538,19 +255,19 @@ local function Node_on_inbox(self, inbox)
   local log = self:logger()
 
   local routing_id, msg, content = wrap_msg(inbox:recvx())
-  if not routing_id                              then return end
-  if #routing_id ~= ZRE_UUID_LEN + 1             then return end
-  if not msg                                     then return end
+  if not routing_id              then return end
+  if #routing_id ~= UUID.LEN + 1 then return end
+  if not msg                     then return end
 
   local uuid     = routing_id:sub(2)
 
   local iter = Iter(msg)
-  if iter:next_bytes(#ZRE_SIGNATURE) ~= ZRE_SIGNATURE           then return end
+  if iter:next_bytes(#ZRE.SIGNATURE) ~= ZRE.SIGNATURE           then return end
   local cmd      = iter:next_uint8()  if not cmd                then return end
-  local version  = iter:next_uint8()  if version ~= ZRE_VERSION then return end
+  local version  = iter:next_uint8()  if version ~= ZRE.VERSION then return end
   local sequence = iter:next_uint16() if not sequence           then return end
 
-  local name = ZRE_COMMANDS_NAME[cmd]
+  local name = ZRE.COMMANDS_NAME[cmd]
   if not name then
     log.alert("Unknown command ", cmd, " from ", UUID.to_string(uuid))
     return
@@ -711,7 +428,7 @@ function Node:new(pipe, outbox)
     peers    = {};
     interval = REAP_INTERVAL or 0; -- beacon internal
     host     = LYRE_MYIP;          -- beacon host
-    port     = ZRE_DISCOVERY_PORT; -- beacon port
+    port     = ZRE.DISCOVERY_PORT; -- beacon port
     logger   = LogLib.new('none',
       require "log.writer.stdout".new(),
       o:_formatter(require "log.formatter.concat".new())
@@ -783,7 +500,7 @@ function Node:start()
     local endpoint = ("tcp://%s:%d"):format(host, port)
 
     local buf = Buffer()
-      :write_bytes(ZRE_PREFIX)
+      :write_bytes(ZRE.BEACON_PREFIX)
       :write_bytes(self:uuid())
       :write_uint16(port)
 
@@ -814,7 +531,7 @@ function Node:stop()
 
   if p.beacon then
     p.beacon:publish(Buffer()
-      :write_bytes(ZRE_PREFIX)
+      :write_bytes(ZRE.BEACON_PREFIX)
       :write_bytes(self:uuid())
       :write_uint16(0)
     :data())
