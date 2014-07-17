@@ -1,13 +1,14 @@
 lyre
 ====
 
-Lua port of Zyre
+Lua port of [Zyre](http://zyre.org)
 
 ###install
 Install dependences:
 ```
-luarocks install luuid
 luarocks install bit32
+luarocks install luuid
+luarocks install struct
 luarocks install lua-log
 luarocks install luasocket
 luarocks install lua-llthreads2
