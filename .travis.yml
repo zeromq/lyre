@@ -1,0 +1,29 @@
+language: c
+
+env:
+  global:
+    - LUAROCKS=2.2.0beta1
+  matrix:
+    - LUA=lua5.1 ZMQ_VER=zeromq4
+    # - LUA=lua5.2 ZMQ_VER=zeromq4
+    # - LUA=luajit ZMQ_VER=zeromq4
+
+branches:
+  only:
+    - master
+
+before_install:
+  - bash .travis/setup_lua.sh
+  - bash .travis/setup_zmq.sh
+
+install:
+  - sudo luarocks make rockspecs/lyre-scm-0.rockspec
+
+script:
+  - lua ./examples/lyrechat.lua
+
+
+notifications:
+  email:
+    on_success: change
+    on_failure: always
