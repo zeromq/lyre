@@ -21,11 +21,11 @@ function Message:new(id, header, content)
 end
 
 function Message:send(peer, s)
-  local header = Buffer()
-    :write_bytes(ZRE.SIGNATURE)
-    :write_uint8(self._id)
-    :write_uint8(peer:version())
-    :write_uint16(peer:next_sent_sequence())
+  local header = Buffer():write(">c0BBI2",
+    ZRE.SIGNATURE, self._id,
+    peer:version(),
+    peer:next_sent_sequence()
+  )
 
   if self._header then
     header:write_bytes(self._header)
@@ -219,23 +219,23 @@ end
 local MessageDecoder = {} do
 
 function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
-  local endpoint  = iter:next_string() if not endpoint   then return end
+  local endpoint, list_size = iter:next(">Bc0I4")
+  if not endpoint then return end
 
-  local list_size = iter:next_uint32() if not list_size  then return end
   local groups = {}
   for i = 1, list_size do
-    local elem = iter:next_longstr()   if not elem       then return end
+    local elem = iter:next_longstr()
+    if not elem then return end
     groups[elem] = true
   end
 
-  local status   = iter:next_uint8()   if not status     then return end
-  local name     = iter:next_string()  if not name       then return end
-
-  local hash_size = iter:next_uint32() if not hash_size  then return end
+  local status, name, hash_size = iter:next(">BBc0I4")
+  if not status then return end
+  
   local headers = {}
   for i = 1, hash_size do
-    local key   = iter:next_string()   if not key        then return end
-    local value = iter:next_longstr()  if not value      then return end
+    local key, value = iter:next_string(">Bc0I4c0")
+    if not key then return end
     headers[key] = value
   end
 
@@ -251,21 +251,20 @@ function MessageDecoder.PING_OK(node, version, uuid, sequence)
 end
 
 function MessageDecoder.JOIN(node, version, uuid, sequence, iter)
-  local group  = iter:next_string() if not group  then return end
-  local status = iter:next_uint8()  if not status then return end
+  local group, status = iter:next("Bc0B") if not group then return end
 
   return MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
 end
 
 function MessageDecoder.LEAVE(node, version, uuid, sequence, iter)
-  local group  = iter:next_string() if not group  then return end
-  local status = iter:next_uint8()  if not status then return end
+  local group, status = iter:next("Bc0B") if not group then return end
+  if not group then return end
 
   return MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
 end
 
 function MessageDecoder.SHOUT(node, version, uuid, sequence, iter, content)
-  local group = iter:next_string() if not group  then return end
+  local group = iter:next_string() if not group then return end
 
   return MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
 end

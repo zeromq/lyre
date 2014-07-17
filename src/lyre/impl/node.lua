@@ -227,11 +227,9 @@ local function Node_on_beacon(self, beacon)
 
   if not host                               then return end
   if #ann ~= ZRE.ANN_SIZE                   then return end
-
-  local iter = Iter(ann)
-  if iter:next_bytes(#ZRE.BEACON_PREFIX) ~= ZRE.BEACON_PREFIX then return end
-  local uuid = iter:next_bytes(UUID.LEN)
-  local port = iter:next_uint16()
+  
+  local prefix, uuid, port = Iter(ann):next(">c4c16I2")
+  assert(prefix == ZRE.BEACON_PREFIX) -- beacon filter out any wrong messages
 
   if port > 0 then
     local endpoint = "tcp://" .. host .. ":" .. port
@@ -260,10 +258,11 @@ local function Node_on_inbox(self, inbox)
   local uuid     = routing_id:sub(2)
 
   local iter = Iter(msg)
-  if iter:next_bytes(#ZRE.SIGNATURE) ~= ZRE.SIGNATURE           then return end
-  local cmd      = iter:next_uint8()  if not cmd                then return end
-  local version  = iter:next_uint8()  if version ~= ZRE.VERSION then return end
-  local sequence = iter:next_uint16() if not sequence           then return end
+  local signature, cmd, version, sequence = iter:next(">c2BBI2")
+  if not signature then return end
+  
+  if signature ~= ZRE.SIGNATURE then return end
+  if version   ~= ZRE.VERSION   then return end
 
   local name = ZRE.COMMANDS_NAME[cmd]
   if not name then
@@ -501,10 +500,9 @@ function Node:start()
 
     local endpoint = ("tcp://%s:%d"):format(host, port)
 
-    local buf = Buffer()
-      :write_bytes(ZRE.BEACON_PREFIX)
-      :write_bytes(self:uuid())
-      :write_uint16(port)
+    local buf = Buffer():write(">c4c16I2", 
+      ZRE.BEACON_PREFIX, self:uuid(), port
+    )
 
     local ok
     if self._private.interval and self._private.interval > 0 then
@@ -512,9 +510,9 @@ function Node:start()
       if not ok then local_cleanup() return nil, err end
     end
 
-    ok, err = beacon:noecho()            if not ok then local_cleanup() return nil, err end
-    ok, err = beacon:publish(buf:data()) if not ok then local_cleanup() return nil, err end
-    ok, err = beacon:subscribe("ZRE")    if not ok then local_cleanup() return nil, err end
+    ok, err = beacon:noecho()                     if not ok then local_cleanup() return nil, err end
+    ok, err = beacon:publish(buf:data())          if not ok then local_cleanup() return nil, err end
+    ok, err = beacon:subscribe(ZRE.BEACON_PREFIX) if not ok then local_cleanup() return nil, err end
 
     p.endpoint = endpoint
     p.inbox    = inbox

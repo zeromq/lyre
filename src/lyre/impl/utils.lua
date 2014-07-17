@@ -1,4 +1,5 @@
-local bit = require "bit32"
+local bit    = require "bit32"
+local struct = require "struct"
 
 local unpack = unpack or table.unpack
 
@@ -12,37 +13,28 @@ end
 local Iter = {} do
 Iter.__index = Iter
 
--- Get a 1-byte number from the frame
-local function GET_NUMBER1(data, pos)
-  return data:sub(pos, pos):byte(), pos + 1
-end
-
--- Get a 2-byte number from the frame
-local function GET_NUMBER2(data, pos)
-  return bit.bor(
-    bit.lshift(data:sub(pos + 0, pos + 0):byte(),  8),
-               data:sub(pos + 1, pos + 1):byte()
-  ), pos + 2
-end
-
--- Get a 4-byte number from the frame
-local function GET_NUMBER4(data, pos)
-  return bit.bor(
-    bit.lshift(data:sub(pos + 0, pos + 0):byte(), 24),
-    bit.lshift(data:sub(pos + 1, pos + 1):byte(), 16),
-    bit.lshift(data:sub(pos + 2, pos + 2):byte(),  8),
-               data:sub(pos + 3, pos + 3):byte()
-  ), pos + 4
-end
-
--- Get a sequence of bytes
-local function GET_BYTES(data, len, pos)
-  local s = (data:sub(pos, pos + len - 1))
-  return s, pos + len
-end
-
 function Iter:new(data)
   return setmetatable({_data = data, _pos = 1, _len = #data}, self)
+end
+
+local function wrap_next(self, ok, ...)
+  if not ok then return end
+  local pos = select("#", ...)
+  self._pos = select(pos, ...)
+  return ...
+end
+
+local function wrap_peek(self, ok, ...)
+  if not ok then return end
+  return ...
+end
+
+function Iter:next(fmt)
+  return wrap_next(self, pcall(struct.unpack, fmt, self._data, self._pos))
+end
+
+function Iter:peek(fmt)
+  return wrap_peek(self, pcall(struct.unpack, fmt, self._data, self._pos))
 end
 
 function Iter:has(n)
@@ -52,45 +44,41 @@ end
 function Iter:next_uint8()
   if not self:has(1) then return end
 
-  local val
-  val, self._pos = GET_NUMBER1(self._data, self._pos)
+  local val = struct.unpack("B", self._data, self._pos)
+  self._pos = self._pos + 1
   return val
 end
 
 function Iter:next_uint16()
   if not self:has(2) then return end
 
-  local val
-  val, self._pos = GET_NUMBER2(self._data, self._pos)
+  local val = struct.unpack(">I2", self._data, self._pos)
+  self._pos = self._pos + 2
   return val
 end
 
 function Iter:next_uint32()
   if not self:has(4) then return end
 
-  local val
-  val, self._pos = GET_NUMBER4(self._data, self._pos)
+  local val = struct.unpack(">I4", self._data, self._pos)
+  self._pos = self._pos + 4
   return val
 end
 
 function Iter:next_bytes(n)
   if not self:has(n) then return end
 
-  local val
-  val, self._pos = GET_BYTES(self._data, n, self._pos)
+  local val = self._data:sub(self._pos, self._pos + n - 1)
+  self._pos = self._pos + n
   return val
 end
 
 function Iter:next_string()
-  local len = self:next_uint8()
-  if not len then return end
-  return self:next_bytes(len)
+  return self:next("Bc0")
 end
 
 function Iter:next_longstr()
-  local len = self:next_uint32()
-  if not len then return end
-  return self:next_bytes(len)
+  return self:next(">I4c0")
 end
 
 end
@@ -110,35 +98,32 @@ function Buffer:write_bytes(v)
 end
 
 function Buffer:write_uint8(v)
-  self._data[#self._data + 1] = string.char(bit.band(v, 0xFF))
+  self._data[#self._data + 1] = struct.pack("B", v)
   return self
 end
 
 function Buffer:write_uint16(v)
-  self._data[#self._data + 1] = 
-    string.char(bit.band(bit.rshift(v, 8), 0xFF)) .. 
-    string.char(bit.band(           v,     0xFF))
+  self._data[#self._data + 1] = struct.pack(">I2", v)
   return self
 end
 
 function Buffer:write_uint32(v)
-  self._data[#self._data + 1] = 
-    string.char(bit.band(bit.rshift(v, 24), 0xFF)) .. 
-    string.char(bit.band(bit.rshift(v, 16), 0xFF)) .. 
-    string.char(bit.band(bit.rshift(v, 8 ), 0xFF)) .. 
-    string.char(bit.band(           v,      0xFF))
+  self._data[#self._data + 1] = struct.pack(">I4", v)
   return self
 end
 
-function Buffer:write_string(val)
-  self:write_uint8(#val)
-  self:write_bytes(val)
+function Buffer:write_string(v)
+  self._data[#self._data + 1] = struct.pack("Bc0", #v, v)
   return self
 end
 
-function Buffer:write_longstr(val)
-  self:write_uint32(#val)
-  self:write_bytes(val)
+function Buffer:write_longstr(v)
+  self._data[#self._data + 1] = struct.pack(">I4c0", #v, v)
+  return self
+end
+
+function Buffer:write(...)
+  self._data[#self._data + 1] = struct.pack(...)
   return self
 end
 
