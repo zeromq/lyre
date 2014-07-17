@@ -1,3 +1,13 @@
+--
+--  Author: Alexey Melnichuk <mimir@newmail.ru>
+--
+--  Copyright (C) 2014 Alexey Melnichuk <mimir@newmail.ru>
+--
+--  Licensed according to the included 'LICENSE' document
+--
+--  This file is part of Lyre library.
+--
+
 -- ZRE Constants
 local ZRE_DISCOVERY_PORT = 5670
 local ZRE_BEACON_VERSION = 1
