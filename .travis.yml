@@ -13,6 +13,7 @@ branches:
     - master
 
 before_install:
+  - sudo apt-get install uuid-dev
   - bash .travis/setup_lua.sh
   - bash .travis/setup_zmq.sh
 
