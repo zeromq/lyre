@@ -17,6 +17,7 @@ before_install:
   - bash .travis/setup_zmq.sh
 
 install:
+  - sudo luarocks install lzmq-beacon --server=http://rocks.moonscript.org/dev
   - sudo luarocks make rockspecs/lyre-scm-0.rockspec
 
 script:
