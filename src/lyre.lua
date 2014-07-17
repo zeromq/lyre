@@ -84,6 +84,14 @@ function Node:uuid()
   return self._private.uuid
 end
 
+function Node:endpoint()
+  if not self._private.endpoint then
+    self:_send("ENDPOINT")
+    self._private.endpoint = self:_recv()
+  end
+  return self._private.endpoint
+end
+
 function Node:name()
   if not self._private.name then
     self:_send("NAME")

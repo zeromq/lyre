@@ -131,8 +131,10 @@ function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups,
   -- Or we can force check 
   -- assert(sequence == 1)
 
-  peer:set_want_sequence(sequence)
-  peer:set_name(name)
+  peer
+    :set_want_sequence(sequence)
+    :set_status(status)
+    :set_name(name)
 
   for key, val in pairs(headers) do
     peer:set_header(key, val)

@@ -111,11 +111,10 @@ function Peer:evasive()
 end
 
 function Peer:expire()
-  return self._private.evasive_at:rest() == 0
+  return self._private.expired_at:rest() == 0
 end
 
 function Peer:send(msg)
-
   local ok, err = msg:send(self, self._private.mailbox)
   if not ok then
     if err:name() == 'EAGAIN' then
@@ -149,13 +148,17 @@ function Peer:next_want_sequence(i)
 end
 
 function Peer:set_want_sequence(v)
-  local p = self._private
-  p.want_sequence = bit.band(v, 0xFFFF)
-  return p.want_sequence
+  self._private.want_sequence = bit.band(v, 0xFFFF)
+  return self
 end
 
 function Peer:status()
   return self._private.status
+end
+
+function Peer:set_status(v)
+  self._private.status = v
+  return self
 end
 
 function Peer:inc_status(i)
@@ -174,10 +177,6 @@ end
 
 function Peer:connected()
   return not not self._private.mailbox
-end
-
-function Peer:status()
-  return self._private.status
 end
 
 function Peer:name()
@@ -346,6 +345,10 @@ end
 
 Node_api[ "NAME"         ] = function (self, pipe)
   return pipe:send(self:name())
+end
+
+Node_api[ "ENDPOINT"     ] = function (self, pipe)
+  return pipe:send(self:endpoint())
 end
 
 Node_api[ "BIND"         ] = function (self, pipe, endpoint)
