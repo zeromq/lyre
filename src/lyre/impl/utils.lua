@@ -8,7 +8,13 @@
 --  This file is part of Lyre library.
 --
 
-local bit    = require "bit32"
+local bit repeat
+  local ok
+  ok, bit = pcall(require, "bit32")
+  if ok then break end
+  bit = require "bit"
+until true
+
 local struct = require "struct"
 
 local unpack = unpack or table.unpack
