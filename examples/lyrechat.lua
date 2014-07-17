@@ -4,7 +4,7 @@
 --
 
 local zloop = require "lzmq.loop"
-local Lyre  = require "Lyre"
+local Lyre  = require "lyre"
 
 
 local interface, name = arg[1], arg[2]
