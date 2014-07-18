@@ -19,6 +19,15 @@ local struct = require "struct"
 
 local unpack = unpack or table.unpack
 
+local BIG_ENDIAN = ">"
+local UINT8      = "B"
+local UINT16     = "I2"
+local UINT32     = "I4"
+local STRING     = "Bc0"
+local LONGSTR    = "I4c0"
+local BYTES      = function(N) return "c" .. tostring(N) end
+local STRUCT     = table.concat
+
 local function count(t)
   local n = 0
   for _ in pairs(t) do n = n + 1 end
@@ -156,4 +165,13 @@ return{
   count  = count;
   unpack = unpack;
   bit    = bit;
+
+  STRUCT     = STRUCT;
+  BIG_ENDIAN = BIG_ENDIAN;
+  UINT8      = UINT8;
+  UINT16     = UINT16;
+  UINT32     = UINT32;
+  STRING     = STRING;
+  LONGSTR    = LONGSTR;
+  BYTES      = BYTES;
 }

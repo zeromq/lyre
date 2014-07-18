@@ -26,6 +26,24 @@ local utils    = require "lyre.impl.utils"
 local ZRE      = require "lyre.zre"
 local Message  = require "lyre.impl.message"
 
+local STRUCT, BIG_ENDIAN, BYTES, UINT8, UINT16 = 
+  utils.STRUCT, utils.BIG_ENDIAN, utils.BYTES, utils.UINT8, utils.UINT16
+
+local BEACON_HEADER = STRUCT{
+  BIG_ENDIAN;
+  BYTES(4);  -- signature
+  BYTES(16); -- version
+  UINT16;    -- port
+}
+
+local MESSAGE_HEADER = STRUCT{
+  BIG_ENDIAN;
+  BYTES(2);  -- signature
+  UINT8;     -- command
+  UINT8;     -- version
+  UINT16;    -- sequence
+}
+
 local bit      = utils.bit
 local Iter     = utils.Iter
 local Buffer   = utils.Buffer
@@ -85,7 +103,7 @@ function Peer:new(node, uuid)
     name          = uuid:str():sub(1, 6);
     version       = ZRE.VERSION;
     sent_sequence = 0;
-    want_sequence = 0;
+    want_sequence = 1;
     status        = 1;
     headers       = {};
   }
@@ -234,7 +252,7 @@ local function Node_on_beacon(self, beacon)
   if not host                               then return end
   if #ann ~= ZRE.ANN_SIZE                   then return end
   
-  local prefix, uuid, port = Iter(ann):next(">c4c16I2")
+  local prefix, uuid, port = Iter(ann):next(BEACON_HEADER)
   assert(prefix == ZRE.BEACON_PREFIX) -- beacon filter out any wrong messages
 
   if port > 0 then
@@ -264,7 +282,7 @@ local function Node_on_inbox(self, inbox)
   local uuid = routing_id:sub(2)
 
   local iter = Iter(msg)
-  local signature, cmd, version, sequence = iter:next(">c2BBI2")
+  local signature, cmd, version, sequence = iter:next(MESSAGE_HEADER)
   if not signature then return end
   
   if signature ~= ZRE.SIGNATURE then return end
@@ -505,7 +523,7 @@ function Node:start()
 
     local endpoint = ("tcp://%s:%d"):format(host, port)
 
-    local buf = Buffer():write(">c4c16I2", 
+    local buf = Buffer():write(BEACON_HEADER, 
       ZRE.BEACON_PREFIX, self:uuid(), port
     )
 

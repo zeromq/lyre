@@ -18,6 +18,10 @@ local Buffer   = utils.Buffer
 local count    = utils.count
 local unpack   = utils.unpack
 
+local STRUCT, BIG_ENDIAN, BYTES  = utils.STRUCT, utils.BIG_ENDIAN, utils.BYTES
+local UINT8,  UINT16,     UINT32 = utils.UINT8,  utils.UINT16,     utils.UINT32
+local STRING, LONGSTR            = utils.STRING, utils.STRING
+
 ---------------------------------------------------------------------
 local Message = {} do
 Message.__index = Message
@@ -226,8 +230,14 @@ end
 ---------------------------------------------------------------------
 local MessageDecoder = {} do
 
+local HELLO_HEADER_1 = STRUCT{BIG_ENDIAN, STRING, UINT32}
+local HELLO_HEADER_2 = STRUCT{BIG_ENDIAN, UINT8, STRING, UINT32}
+local HASH_ELEMENT   = STRUCT{BIG_ENDIAN, STRING, LONGSTR}
+local JOIN_HEADER    = STRUCT{BIG_ENDIAN, STRING, UINT8}
+local LEAVE_HEADER   = STRUCT{BIG_ENDIAN, STRING, UINT8}
+
 function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
-  local endpoint, list_size = iter:next(">Bc0I4")
+  local endpoint, list_size = iter:next(HELLO_HEADER_1)
   if not endpoint then return end
 
   local groups = {}
@@ -237,12 +247,12 @@ function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
     groups[elem] = true
   end
 
-  local status, name, hash_size = iter:next(">BBc0I4")
+  local status, name, hash_size = iter:next(HELLO_HEADER_2)
   if not status then return end
   
   local headers = {}
   for i = 1, hash_size do
-    local key, value = iter:next_string(">Bc0I4c0")
+    local key, value = iter:next(HASH_ELEMENT)
     if not key then return end
     headers[key] = value
   end
@@ -259,13 +269,13 @@ function MessageDecoder.PING_OK(node, version, uuid, sequence)
 end
 
 function MessageDecoder.JOIN(node, version, uuid, sequence, iter)
-  local group, status = iter:next("Bc0B") if not group then return end
+  local group, status = iter:next(JOIN_HEADER) if not group then return end
 
   return MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
 end
 
 function MessageDecoder.LEAVE(node, version, uuid, sequence, iter)
-  local group, status = iter:next("Bc0B") if not group then return end
+  local group, status = iter:next(LEAVE_HEADER) if not group then return end
   if not group then return end
 
   return MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
