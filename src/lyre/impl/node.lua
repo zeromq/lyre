@@ -82,7 +82,7 @@ function Peer:new(uuid)
   o._private = {
     uuid          = uuid;
     name          = uuid:str():sub(1, 6);
-    version       = 2;
+    version       = ZRE.VERSION;
     sent_sequence = 0;
     want_sequence = 0;
     status        = 1;
@@ -129,6 +129,7 @@ function Peer:send(msg)
   if not ok then
     if err:name() == 'EAGAIN' then
       self:disconnect()
+      -- @fixme remove from node
       return nil, err
     end
     zmq.assert(nil, err)
@@ -265,7 +266,7 @@ local function Node_on_inbox(self, inbox)
   if #routing_id ~= UUID.LEN + 1 then return end
   if not msg                     then return end
 
-  local uuid     = routing_id:sub(2)
+  local uuid = routing_id:sub(2)
 
   local iter = Iter(msg)
   local signature, cmd, version, sequence = iter:next(">c2BBI2")
@@ -296,10 +297,11 @@ local function Node_on_interval(self)
     end
   end
 
+  local msg
   for id, peer in pairs(self._private.peers) do
     if peer:evasive() then
-      local msg = MessageEncoder.PING(node)
-      self:remove_peer(peer):disconnect()
+      msg = msg or MessageEncoder.PING(self)
+      peer:send(msg)
     end
   end
 
@@ -477,8 +479,6 @@ end
 
 function Node:start()
   local p = self._private
-
-  assert(not p.inbox)
 
   local ctx = p.loop:context()
 
