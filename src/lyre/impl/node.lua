@@ -76,10 +76,11 @@ end
 local Peer = {} do
 Peer.__index = Peer
 
-function Peer:new(uuid)
+function Peer:new(node, uuid)
   local o = setmetatable({}, self)
   uuid = UUID.new(uuid)
   o._private = {
+    node          = node;
     uuid          = uuid;
     name          = uuid:str():sub(1, 6);
     version       = ZRE.VERSION;
@@ -128,8 +129,7 @@ function Peer:send(msg)
   local ok, err = msg:send(self, self._private.mailbox)
   if not ok then
     if err:name() == 'EAGAIN' then
-      self:disconnect()
-      -- @fixme remove from node
+      self._private.node:remove_peer(self):disconnect()
       return nil, err
     end
     zmq.assert(nil, err)
@@ -710,7 +710,7 @@ function Node:require_peer(uuid, endpoint)
 
     local err
 
-    peer, err = Peer:new(uuid)
+    peer, err = Peer:new(self, uuid)
     if not peer then
       print("Error:", err)
       return nil, err
