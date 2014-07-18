@@ -145,119 +145,6 @@ end
 ---------------------------------------------------------------------
 
 ---------------------------------------------------------------------
-local MessageProcessor = {} do
-
-function MessageProcessor.beacon(node, version, uuid, host, port)
-  local log  = node:logger()
-  if port > 0 then
-    local endpoint = "tcp://" .. host .. ":" .. port
-    local peer     = node:require_peer(uuid, endpoint)
-    log.trace("BEACON: ", peer:uuid(true), peer:endpoint())
-    return
-  end
-
-  local peer = self:find_peer(uuid)
-  if peer then self:remove_peer(peer):disconnect() end
-end
-
-function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
-  local log  = node:logger()
-  local peer = assert(node:require_peer(uuid, endpoint))
-
-  if peer:ready() then
-    log.alert("Get duplicate HELLO messge from ", peer:uuid(true), " ", name, " ", endpoint)
-    node:remove_peer(peer):disconnect()
-    return
-  end
-
-  if sequence ~= 1 then return end
-
-  peer
-    :set_status(status)
-    :set_name(name)
-
-  for key, val in pairs(headers) do
-    peer:set_header(key, val)
-  end
-
-  local headers = 
-
-  -- Tell the caller about the peer
-  node:send("ENTER", peer:uuid(true), peer:name(), 
-    Buffer():write_hash(peer:headers()):data(),
-    peer:endpoint()
-  )
-
-  for group_name in pairs(groups) do
-    node:join_peer_group(peer, group_name)
-  end
-
-  log.info("New peer ready ", peer:uuid(true), " ", name, " ", endpoint)
-
-  peer:set_ready(true)
-end
-
-local function find_peer(node, version, uuid, sequence)
-  local log  = node:logger()
-  local peer = node:find_peer(uuid)
-  if not peer then
-    log.warning("Unknown peer: ", UUID.to_string(uuid))
-    return
-  end
-
-  if peer:next_want_sequence() ~= sequence then
-    node:remove_peer(peer):disconnect()
-    log.warning("Invalid message sequence. Expected ", peer:next_want_sequence(0), " Got:", sequence)
-    return
-  end
-
-  return peer
-end
-
-function MessageProcessor.PING(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  peer:send(MessageEncoder.PING_OK(node))
-end
-
-function MessageProcessor.PING_OK(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-end
-
-function MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:join_peer_group(peer, group)
-end
-
-function MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:leave_peer_group(peer, group)
-end
-
-function MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
-end
-
-function MessageProcessor.WHISPER(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
-  if not peer then return end
-
-  node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
-end
-
-end
----------------------------------------------------------------------
-
----------------------------------------------------------------------
 local MessageDecoder = {} do
 
 function MessageDecoder.dispatch(node, routing_id, msg, content)
@@ -291,7 +178,7 @@ function MessageDecoder.beacon(node, host, ann)
   local prefix, uuid, port = Iter(ann):next(BEACON_HEADER)
   assert(prefix == ZRE.BEACON_PREFIX) -- beacon filter out any wrong messages
 
-  return MessageProcessor.beacon(node, ZRE.BEACON_VERSION, uuid, host, port)
+  return node:on_message("beacon", ZRE.BEACON_VERSION, uuid, host, port)
 end
 
 function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
@@ -315,38 +202,38 @@ function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
     headers[key] = value
   end
 
-  return MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
+  return node:on_message("HELLO", version, uuid, sequence, endpoint, groups, status, name, headers)
 end
 
 function MessageDecoder.PING(node, version, uuid, sequence)
-  return MessageProcessor.PING(node, version, uuid, sequence)
+  return node:on_message("PING", version, uuid, sequence)
 end
 
 function MessageDecoder.PING_OK(node, version, uuid, sequence)
-  return MessageProcessor.PING_OK(node, version, uuid, sequence)
+  return node:on_message("PING_OK", version, uuid, sequence)
 end
 
 function MessageDecoder.JOIN(node, version, uuid, sequence, iter)
   local group, status = iter:next(JOIN_HEADER) if not group then return end
 
-  return MessageProcessor.JOIN(node, version, uuid, sequence, group, status)
+  return node:on_message("JOIN", version, uuid, sequence, group, status)
 end
 
 function MessageDecoder.LEAVE(node, version, uuid, sequence, iter)
   local group, status = iter:next(LEAVE_HEADER) if not group then return end
   if not group then return end
 
-  return MessageProcessor.LEAVE(node, version, uuid, sequence, group, status)
+  return node:on_message("LEAVE", version, uuid, sequence, group, status)
 end
 
 function MessageDecoder.SHOUT(node, version, uuid, sequence, iter, content)
   local group = iter:next_string() if not group then return end
 
-  return MessageProcessor.SHOUT(node, version, uuid, sequence, group, content)
+  return node:on_message("SHOUT", version, uuid, sequence, group, content)
 end
 
 function MessageDecoder.WHISPER(node, version, uuid, sequence, iter, content)
-  return MessageProcessor.WHISPER(node, version, uuid, sequence, content)
+  return node:on_message("WHISPER", version, uuid, sequence, content)
 end
 
 end

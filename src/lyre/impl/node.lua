@@ -27,6 +27,7 @@ local ZRE      = require "lyre.zre"
 local Message  = require "lyre.impl.message"
 
 local bit            = utils.bit
+local Buffer         = utils.Buffer
 local MessageDecoder = Message.decoder
 local MessageEncoder = Message.encoder
 
@@ -328,6 +329,119 @@ end
 ---------------------------------------------------------------------
 
 ---------------------------------------------------------------------
+local Node_on_message = {} do
+
+function Node_on_message.beacon(node, version, uuid, host, port)
+  local log  = node:logger()
+  if port > 0 then
+    local endpoint = "tcp://" .. host .. ":" .. port
+    local peer     = node:require_peer(uuid, endpoint)
+    log.trace("BEACON: ", peer:uuid(true), peer:endpoint())
+    return
+  end
+
+  local peer = self:find_peer(uuid)
+  if peer then self:remove_peer(peer):disconnect() end
+end
+
+function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
+  local log  = node:logger()
+  local peer = assert(node:require_peer(uuid, endpoint))
+
+  if peer:ready() then
+    log.alert("Get duplicate HELLO messge from ", peer:uuid(true), " ", name, " ", endpoint)
+    node:remove_peer(peer):disconnect()
+    return
+  end
+
+  if sequence ~= 1 then return end
+
+  peer
+    :set_status(status)
+    :set_name(name)
+
+  for key, val in pairs(headers) do
+    peer:set_header(key, val)
+  end
+
+  local headers = 
+
+  -- Tell the caller about the peer
+  node:send("ENTER", peer:uuid(true), peer:name(), 
+    Buffer():write_hash(peer:headers()):data(),
+    peer:endpoint()
+  )
+
+  for group_name in pairs(groups) do
+    node:join_peer_group(peer, group_name)
+  end
+
+  log.info("New peer ready ", peer:uuid(true), " ", name, " ", endpoint)
+
+  peer:set_ready(true)
+end
+
+local function find_peer(node, version, uuid, sequence)
+  local log  = node:logger()
+  local peer = node:find_peer(uuid)
+  if not peer then
+    log.warning("Unknown peer: ", UUID.to_string(uuid))
+    return
+  end
+
+  if peer:next_want_sequence() ~= sequence then
+    node:remove_peer(peer):disconnect()
+    log.warning("Invalid message sequence. Expected ", peer:next_want_sequence(0), " Got:", sequence)
+    return
+  end
+
+  return peer
+end
+
+function Node_on_message.PING(node, version, uuid, sequence)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+
+  peer:send(MessageEncoder.PING_OK(node))
+end
+
+function Node_on_message.PING_OK(node, version, uuid, sequence)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+end
+
+function Node_on_message.JOIN(node, version, uuid, sequence, group, status)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+
+  node:join_peer_group(peer, group)
+end
+
+function Node_on_message.LEAVE(node, version, uuid, sequence, group, status)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+
+  node:leave_peer_group(peer, group)
+end
+
+function Node_on_message.SHOUT(node, version, uuid, sequence, group, content)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+
+  node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
+end
+
+function Node_on_message.WHISPER(node, version, uuid, sequence, group, content)
+  local peer = find_peer(node, version, uuid, sequence)
+  if not peer then return end
+
+  node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
+end
+
+end
+---------------------------------------------------------------------
+
+---------------------------------------------------------------------
 local Node = {} do
 Node.__index = Node
 
@@ -523,6 +637,10 @@ end
 
 function Node:run()
   return self._private.loop:start()
+end
+
+function Node:on_message(msg, ...)
+  Node_on_message[msg](self, ...)
 end
 
 function Node:destroy()
