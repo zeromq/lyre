@@ -138,11 +138,9 @@ function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups,
     return
   end
 
-  -- Or we can force check 
-  -- assert(sequence == 1)
+  if sequence ~= 1 then return end
 
   peer
-    :set_want_sequence(sequence)
     :set_status(status)
     :set_name(name)
 

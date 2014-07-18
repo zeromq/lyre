@@ -158,11 +158,6 @@ function Peer:next_want_sequence(i)
   return p.want_sequence
 end
 
-function Peer:set_want_sequence(v)
-  self._private.want_sequence = bit.band(v, 0xFFFF)
-  return self
-end
-
 function Peer:status()
   return self._private.status
 end
