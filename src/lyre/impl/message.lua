@@ -22,6 +22,27 @@ local STRUCT, BIG_ENDIAN, BYTES  = utils.STRUCT, utils.BIG_ENDIAN, utils.BYTES
 local UINT8,  UINT16,     UINT32 = utils.UINT8,  utils.UINT16,     utils.UINT32
 local STRING, LONGSTR            = utils.STRING, utils.STRING
 
+local BEACON_HEADER = STRUCT{
+  BIG_ENDIAN;
+  BYTES(4);  -- signature
+  BYTES(16); -- version
+  UINT16;    -- port
+}
+
+local MESSAGE_HEADER = STRUCT{
+  BIG_ENDIAN;
+  BYTES(2);  -- signature
+  UINT8;     -- command
+  UINT8;     -- version
+  UINT16;    -- sequence
+}
+
+local HELLO_HEADER_1 = STRUCT{BIG_ENDIAN, STRING, UINT32}
+local HELLO_HEADER_2 = STRUCT{BIG_ENDIAN, UINT8, STRING, UINT32}
+local HASH_ELEMENT   = STRUCT{BIG_ENDIAN, STRING, LONGSTR}
+local JOIN_HEADER    = STRUCT{BIG_ENDIAN, STRING, UINT8}
+local LEAVE_HEADER   = STRUCT{BIG_ENDIAN, STRING, UINT8}
+
 ---------------------------------------------------------------------
 local Message = {} do
 Message.__index = Message
@@ -68,25 +89,19 @@ end
 ---------------------------------------------------------------------
 local MessageEncoder = {} do
 
+function MessageEncoder.beacon(node, port)
+  return Buffer():write(BEACON_HEADER, 
+    ZRE.BEACON_PREFIX, node:uuid(), port
+  ):data()
+end
+
 function MessageEncoder.HELLO(node)
   local buf = Buffer()
     :write_string(node:endpoint())
-    :write_uint32(count(node:groups()))
-
-  for name in pairs(node:groups()) do
-    buf:write_longstr(name)
-  end
-
-  buf
+    :write_set(node:groups())
     :write_uint8(node:status())
     :write_string(node:name())
-    :write_uint32(count(node:headers()))
-
-  for k, v in pairs(node:headers()) do
-    buf
-      :write_string(k)
-      :write_longstr(v)
-  end
+    :write_hash(node:headers())
 
   return Message:new(ZRE.COMMANDS.HELLO, buf:data())
 end
@@ -132,6 +147,19 @@ end
 ---------------------------------------------------------------------
 local MessageProcessor = {} do
 
+function MessageProcessor.beacon(node, version, uuid, host, port)
+  local log  = node:logger()
+  if port > 0 then
+    local endpoint = "tcp://" .. host .. ":" .. port
+    local peer     = node:require_peer(uuid, endpoint)
+    log.trace("BEACON: ", peer:uuid(true), peer:endpoint())
+    return
+  end
+
+  local peer = self:find_peer(uuid)
+  if peer then self:remove_peer(peer):disconnect() end
+end
+
 function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
   local log  = node:logger()
   local peer = assert(node:require_peer(uuid, endpoint))
@@ -152,9 +180,11 @@ function MessageProcessor.HELLO(node, version, uuid, sequence, endpoint, groups,
     peer:set_header(key, val)
   end
 
+  local headers = 
+
   -- Tell the caller about the peer
   node:send("ENTER", peer:uuid(true), peer:name(), 
-    "", -- peer:headers() -- @todo pack headers hash
+    Buffer():write_hash(peer:headers()):data(),
     peer:endpoint()
   )
 
@@ -230,11 +260,39 @@ end
 ---------------------------------------------------------------------
 local MessageDecoder = {} do
 
-local HELLO_HEADER_1 = STRUCT{BIG_ENDIAN, STRING, UINT32}
-local HELLO_HEADER_2 = STRUCT{BIG_ENDIAN, UINT8, STRING, UINT32}
-local HASH_ELEMENT   = STRUCT{BIG_ENDIAN, STRING, LONGSTR}
-local JOIN_HEADER    = STRUCT{BIG_ENDIAN, STRING, UINT8}
-local LEAVE_HEADER   = STRUCT{BIG_ENDIAN, STRING, UINT8}
+function MessageDecoder.dispatch(node, routing_id, msg, content)
+  local log = node:logger()
+
+  if #routing_id ~= UUID.LEN + 1 then return end
+  local uuid = routing_id:sub(2)
+
+  local iter = Iter(msg)
+  local signature, cmd, version, sequence = iter:next(MESSAGE_HEADER)
+
+  if not signature              then return end
+  if signature ~= ZRE.SIGNATURE then return end
+  if version   ~= ZRE.VERSION   then return end
+
+  local name = ZRE.COMMANDS_NAME[cmd]
+  if not name then
+    log.alert("Unknown command ", cmd, " from ", UUID.to_string(uuid))
+    return
+  end
+
+  log.notice("INBOX : ", UUID.to_string(uuid), name, "#", sequence)
+
+  local fn = MessageDecoder[name]
+  if fn then fn(node, version, uuid, sequence, iter, content) end
+end
+
+function MessageDecoder.beacon(node, host, ann)
+  if #ann ~= ZRE.ANN_SIZE then return end
+
+  local prefix, uuid, port = Iter(ann):next(BEACON_HEADER)
+  assert(prefix == ZRE.BEACON_PREFIX) -- beacon filter out any wrong messages
+
+  return MessageProcessor.beacon(node, ZRE.BEACON_VERSION, uuid, host, port)
+end
 
 function MessageDecoder.HELLO(node, version, uuid, sequence, iter)
   local endpoint, list_size = iter:next(HELLO_HEADER_1)

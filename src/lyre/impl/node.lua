@@ -26,28 +26,9 @@ local utils    = require "lyre.impl.utils"
 local ZRE      = require "lyre.zre"
 local Message  = require "lyre.impl.message"
 
-local STRUCT, BIG_ENDIAN, BYTES, UINT8, UINT16 = 
-  utils.STRUCT, utils.BIG_ENDIAN, utils.BYTES, utils.UINT8, utils.UINT16
-
-local BEACON_HEADER = STRUCT{
-  BIG_ENDIAN;
-  BYTES(4);  -- signature
-  BYTES(16); -- version
-  UINT16;    -- port
-}
-
-local MESSAGE_HEADER = STRUCT{
-  BIG_ENDIAN;
-  BYTES(2);  -- signature
-  UINT8;     -- command
-  UINT8;     -- version
-  UINT16;    -- sequence
-}
-
-local bit      = utils.bit
-local Iter     = utils.Iter
-local Buffer   = utils.Buffer
-local MessageDecoder, MessageEncoder = Message.decoder, Message.encoder
+local bit            = utils.bit
+local MessageDecoder = Message.decoder
+local MessageEncoder = Message.encoder
 
 ---------------------------------------------------------------------
 local Group = {} do
@@ -242,84 +223,6 @@ end
 ---------------------------------------------------------------------
 
 ---------------------------------------------------------------------
-local Node = {} do
-Node.__index = Node
-
-local function Node_on_beacon(self, beacon)
-  local log  = self:logger()
-  local host, ann = beacon:recv()
-
-  if not host                               then return end
-  if #ann ~= ZRE.ANN_SIZE                   then return end
-  
-  local prefix, uuid, port = Iter(ann):next(BEACON_HEADER)
-  assert(prefix == ZRE.BEACON_PREFIX) -- beacon filter out any wrong messages
-
-  if port > 0 then
-    local endpoint = "tcp://" .. host .. ":" .. port
-
-    log.trace("BEACON: ", UUID.to_string(uuid), endpoint)
-
-    self:require_peer(uuid, endpoint)
-  else
-    peer = self:find_peer(uuid)
-    if peer then self:remove_peer(peer):disconnect() end
-  end
-end
-
-local function wrap_msg(a, b, ...)
-  return a, b, {...}
-end
-
-local function Node_on_inbox(self, inbox)
-  local log = self:logger()
-
-  local routing_id, msg, content = wrap_msg(inbox:recvx())
-  if not routing_id              then return end
-  if #routing_id ~= UUID.LEN + 1 then return end
-  if not msg                     then return end
-
-  local uuid = routing_id:sub(2)
-
-  local iter = Iter(msg)
-  local signature, cmd, version, sequence = iter:next(MESSAGE_HEADER)
-  if not signature then return end
-  
-  if signature ~= ZRE.SIGNATURE then return end
-  if version   ~= ZRE.VERSION   then return end
-
-  local name = ZRE.COMMANDS_NAME[cmd]
-  if not name then
-    log.alert("Unknown command ", cmd, " from ", UUID.to_string(uuid))
-    return
-  end
-
-  log.notice("INBOX : ", UUID.to_string(uuid), name, "#", sequence)
-
-  local fn = MessageDecoder[name]
-  if fn then fn(self, version, uuid, sequence, iter, content) end
-end
-
-local function Node_on_interval(self)
-  local log = self:logger()
-
-  for id, peer in pairs(self._private.peers) do
-    if peer:expire() then
-      log.info(peer:name(), " ", peer:endpoint(), " - expire")
-      self:remove_peer(peer):disconnect()
-    end
-  end
-
-  local msg
-  for id, peer in pairs(self._private.peers) do
-    if peer:evasive() then
-      msg = msg or MessageEncoder.PING(self)
-      peer:send(msg)
-    end
-  end
-
-end
-
 local Node_api_dispatch do
 
 local Node_api = {}
@@ -422,6 +325,49 @@ Node_api[ "$TERM"        ] = function (self, pipe)
 end
 
 end
+---------------------------------------------------------------------
+
+---------------------------------------------------------------------
+local Node = {} do
+Node.__index = Node
+
+local function Node_on_beacon(self, beacon)
+  local host, ann = beacon:recv()
+  if not host then return end
+  return MessageDecoder.beacon(self, host, ann)
+end
+
+local function wrap_msg(a, b, ...)
+  return a, b, {...}
+end
+
+local function Node_on_inbox(self, inbox)
+  local routing_id, msg, content = wrap_msg(inbox:recvx())
+  if not routing_id              then return end
+  if not msg                     then return end
+
+  return MessageDecoder.dispatch(self, routing_id, msg, content)
+end
+
+local function Node_on_interval(self)
+  local log = self:logger()
+
+  for id, peer in pairs(self._private.peers) do
+    if peer:expire() then
+      log.info(peer:name(), " ", peer:endpoint(), " - expire")
+      self:remove_peer(peer):disconnect()
+    end
+  end
+
+  local msg
+  for id, peer in pairs(self._private.peers) do
+    if peer:evasive() then
+      msg = msg or MessageEncoder.PING(self)
+      peer:send(msg)
+    end
+  end
+
+end
 
 local function Node_on_command(self, pipe)
   return Node_api_dispatch(self, pipe, pipe:recvx())
@@ -522,10 +468,7 @@ function Node:start()
     if not port then local_cleanup() return nil, err end
 
     local endpoint = ("tcp://%s:%d"):format(host, port)
-
-    local buf = Buffer():write(BEACON_HEADER, 
-      ZRE.BEACON_PREFIX, self:uuid(), port
-    )
+    local announcement = MessageEncoder.beacon(self, port)
 
     local ok
     if self._private.interval and self._private.interval > 0 then
@@ -534,7 +477,7 @@ function Node:start()
     end
 
     ok, err = beacon:noecho()                     if not ok then local_cleanup() return nil, err end
-    ok, err = beacon:publish(buf:data())          if not ok then local_cleanup() return nil, err end
+    ok, err = beacon:publish(announcement)        if not ok then local_cleanup() return nil, err end
     ok, err = beacon:subscribe(ZRE.BEACON_PREFIX) if not ok then local_cleanup() return nil, err end
 
     p.endpoint = endpoint
@@ -553,11 +496,7 @@ function Node:stop()
   local p = self._private
 
   if p.beacon then
-    p.beacon:publish(Buffer()
-      :write_bytes(ZRE.BEACON_PREFIX)
-      :write_bytes(self:uuid())
-      :write_uint16(0)
-    :data())
+    p.beacon:publish(MessageEncoder.beacon(self, 0))
   end
 
   if p.loop then
@@ -584,10 +523,6 @@ end
 
 function Node:run()
   return self._private.loop:start()
-end
-
-function Node:interrupt()
-  return self._private.loop:interrupt()
 end
 
 function Node:destroy()
@@ -667,46 +602,6 @@ function Node:leave_peer_group(peer, name)
   return true
 end
 
-function Node:headers()
-  return self._private.headers
-end
-
-function Node:set_header(k, v)
-  self._private.headers[k] = v
-  return self
-end
-
-function Node:header(k)
-  return self._private.headers[k]
-end
-
-function Node:set_beacon_interval(v)
-  self._private.interval = v
-  return self
-end
-
-function Node:beacon_interval(v)
-  return self._private.interval
-end
-
-function Node:set_beacon_host(v)
-  self._private.host = v
-  return self
-end
-
-function Node:beacon_host(v)
-  return self._private.host
-end
-
-function Node:set_beacon_port(v)
-  self._private.port = v
-  return self
-end
-
-function Node:beacon_port(v)
-  return self._private.port
-end
-
 function Node:require_peer(uuid, endpoint)
   local log = self:logger()
   local p = self._private
@@ -760,6 +655,46 @@ function Node:remove_peer(peer)
     p.peers[peer:uuid()] = nil
   end
   return peer
+end
+
+function Node:headers()
+  return self._private.headers
+end
+
+function Node:set_header(k, v)
+  self._private.headers[k] = v
+  return self
+end
+
+function Node:header(k)
+  return self._private.headers[k]
+end
+
+function Node:set_beacon_interval(v)
+  self._private.interval = v
+  return self
+end
+
+function Node:beacon_interval(v)
+  return self._private.interval
+end
+
+function Node:set_beacon_host(v)
+  self._private.host = v
+  return self
+end
+
+function Node:beacon_host(v)
+  return self._private.host
+end
+
+function Node:set_beacon_port(v)
+  self._private.port = v
+  return self
+end
+
+function Node:beacon_port(v)
+  return self._private.port
 end
 
 function Node:send(...)

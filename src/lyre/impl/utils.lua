@@ -28,6 +28,8 @@ local LONGSTR    = "I4c0"
 local BYTES      = function(N) return "c" .. tostring(N) end
 local STRUCT     = table.concat
 
+local HASH_ELEMENT = STRUCT{BIG_ENDIAN; STRING; LONGSTR}
+
 local function count(t)
   local n = 0
   for _ in pairs(t) do n = n + 1 end
@@ -106,6 +108,26 @@ function Iter:next_longstr()
   return self:next(">I4c0")
 end
 
+function Iter:next_hash(t)
+  t = t or {}
+  local n = self:next_uint32() if not n then return end
+  for i = 1, n do
+    local k, v = self:next(HASH_ELEMENT) if not k then return end
+    t[k] = v
+  end
+  return t
+end
+
+function Iter:next_set(t)
+  t = t or {}
+  local n = self:next_uint32() if not n then return end
+  for i = 1, n do
+    local k = self:next_longstr() if not k then return end
+    t[k] = true
+  end
+  return t
+end
+
 end
 ---------------------------------------------------------------------
 
@@ -144,6 +166,20 @@ end
 
 function Buffer:write_longstr(v)
   self._data[#self._data + 1] = struct.pack(">I4c0", #v, v)
+  return self
+end
+
+function Buffer:write_hash(t)
+  self:write_uint32(count(t))
+  for k, v in pairs(t) do
+    self:write(HASH_ELEMENT, #k, k, #v, v)
+  end
+  return self
+end
+
+function Buffer:write_set(t)
+  self:write_uint32(count(t))
+  for k in pairs(t) do self:write_longstr(k) end
   return self
 end
 
