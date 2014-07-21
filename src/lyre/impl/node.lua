@@ -377,8 +377,11 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
     return
   end
 
-  -- @todo check error
-  local peer = assert(node:require_peer(uuid, endpoint))
+  local peer, err = node:require_peer(uuid, endpoint)
+  if not peer then
+    log.alert("Can not create peer:", UUID.to_string(uuid), " ", name, " ", endpoint)
+    return
+  end
 
   if peer:ready() then
     log.alert("Get duplicate HELLO messge from ", peer:uuid(true), " ", name, " ", endpoint)
@@ -393,8 +396,6 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
   for key, val in pairs(headers) do
     peer:set_header(key, val)
   end
-
-  local headers = 
 
   -- Tell the caller about the peer
   node:send("ENTER", peer:uuid(true), peer:name(), 
