@@ -17,7 +17,10 @@ if not name then
 end
 
 local node = Lyre.Node()
-  -- :set_verbose()
+  :set_log_writer([[
+    return require"log.writer.console.color".new()
+  ]])
+  :set_verbose("info")
   :set_name(name)
   :join("CHAT")
 
@@ -28,9 +31,9 @@ end
 node:start()
 
 print("****************************************************")
-print("My name    : " .. node:name()              )
-print("My uuid    : " .. node:uuid()              )
-print("My endpoint: " .. node:endpoint()          )
+print(" My name    : " .. node:name()                       )
+print(" My uuid    : " .. node:uuid()                       )
+print(" My endpoint: " .. node:endpoint()                   )
 print("****************************************************")
 
 loop = zloop.new()

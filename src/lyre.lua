@@ -10,16 +10,12 @@
 
 ---------------------------------------------------------------------
 local function lyre_node_thread(pipe, outbox)
-  local zmq  = require "lzmq"
-  local zth  = require "lzmq.threads"
   local Node = require "lyre.impl.node"
 
-  outbox = zmq.assert(zth.context():socket{zmq.PAIR, connect = outbox})
   local node = Node:new(pipe, outbox)
 
   node:run()
   node:destroy()
-  outbox:destroy()
 end
 ---------------------------------------------------------------------
 
@@ -121,8 +117,15 @@ function Node:set_header(key, value)
   return self
 end
 
-function Node:set_verbose()
-  self:_send("SET VERBOSE")
+function Node:set_verbose(lvl)
+  lvl = lvl or 'trace'
+  self:_send("SET VERBOSE", lvl)
+  return self
+end
+
+function Node:set_log_writer(writer)
+  assert(type(writer) == "string")
+  self:_send("SET LOG WRITER", writer)
   return self
 end
 
@@ -147,14 +150,14 @@ function Node:start()
   self:_send("START")
   local ok, err = self:_recv()
   if not ok then return nil, err end
-  return ok == "1"
+  return ok == "1", err
 end
 
 function Node:stop()
   self:_send("STOP")
   local ok, err = self:_recv()
   if not ok then return nil, err end
-  return ok == "1"
+  return ok == "1", err
 end
 
 function Node:join(group)

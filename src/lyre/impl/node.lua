@@ -216,7 +216,7 @@ function Peer:disconnect()
   if self:connected() then
     local p = self._private
     p.mailbox:close()
-    p.mailbox, p.uuid, p.endpoint, p.ready = nil
+    p.mailbox, p.endpoint, p.ready = nil
   end
 end
 
@@ -229,9 +229,26 @@ local Node_api_dispatch do
 local Node_api = {}
 
 function Node_api_dispatch(self, pipe, cmd, ...)
-  if not cmd then return nil, ... end
+  local log = self:logger()
+  if not cmd then
+    log.error("Can not recv API command:", ...)
+    return nil, ...
+  end
+
   local fn = Node_api[cmd]
-  if fn then return fn(self, pipe, ...) end
+  if fn then
+    log.debug("API start: ", cmd, ...)
+    local ok, err = fn(self, pipe, ...)
+    if not ok then
+      log.error("API error: ", cmd, " - ", err)
+    else
+      log.debug("API done : ", cmd)
+    end
+    return ok, err
+  end
+
+  log.alert("Recv unknown API command: ", api, ...)
+
   return nil, 'Unknown command'
 end
 
@@ -245,8 +262,17 @@ Node_api[ "SET HEADER"   ] = function (self, pipe, name, value)
   return true
 end
 
-Node_api[ "SET VERBOSE"  ] = function (self, pipe)
-  self:set_log_level("trace")
+Node_api[ "SET VERBOSE"  ] = function (self, pipe, level)
+  if level then self:set_log_level(level) end
+  return true
+end
+
+Node_api[ "SET LOG WRITER"] = function (self, pipe, writer)
+  if not writer then return end
+  local loadstring = loadstring or load
+  writer = loadstring(writer) if not writer then return end
+  writer = writer()           if not writer then return end
+  self:set_log_writer(writer)
   return true
 end
 
@@ -268,36 +294,31 @@ Node_api[ "SET INTERVAL" ] = function (self, pipe, value)
 end
 
 Node_api[ "UUID"         ] = function (self, pipe)
-  return pipe:send(self:uuid(true))
+  return self:api_response(self:uuid(true))
 end
 
 Node_api[ "NAME"         ] = function (self, pipe)
-  return pipe:send(self:name())
+  return self:api_response(self:name())
 end
 
 Node_api[ "ENDPOINT"     ] = function (self, pipe)
-  return pipe:send(self:endpoint())
+  return self:api_response(self:endpoint())
 end
 
 Node_api[ "BIND"         ] = function (self, pipe, endpoint)
-  local ok, err = self:bind(endpoint)
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:bind(endpoint))
 end
 
 Node_api[ "CONNECT"      ] = function (self, pipe, endpoint)
-  local ok, err = self:connect(endpoint)
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:connect(endpoint))
 end
 
 Node_api[ "START"        ] = function (self, pipe)
-  local ok, err = self:start()
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:start())
 end
 
 Node_api[ "STOP"         ] = function (self, pipe)
-  local ok, err = self:stop()
-  
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:stop())
 end
 
 Node_api[ "WHISPER"      ] = function (self, pipe, identity, ...)
@@ -346,6 +367,17 @@ end
 
 function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
   local log  = node:logger()
+
+  if sequence ~= 1 then
+    log.alert("Get HELLO with seq: ",sequence, " from", UUID.to_string(uuid), " ", name, " ", endpoint)
+    peer = node:find_peer(uuid)
+    if peer then
+      node:remove_peer(peer):disconnect()
+    end
+    return
+  end
+
+  -- @todo check error
   local peer = assert(node:require_peer(uuid, endpoint))
 
   if peer:ready() then
@@ -353,8 +385,6 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
     node:remove_peer(peer):disconnect()
     return
   end
-
-  if sequence ~= 1 then return end
 
   peer
     :set_status(status)
@@ -490,6 +520,8 @@ end
 function Node:new(pipe, outbox)
   local ctx = zmq.assert(zthreads.context())
 
+  outbox = zmq.assert(ctx:socket{zmq.PAIR, connect = outbox})
+
   local uuid = UUID.new()
 
   local LYRE_MYIP = LYRE_MYIP or os.getenv("LYRE_MYIP")
@@ -516,9 +548,10 @@ function Node:new(pipe, outbox)
     host     = LYRE_MYIP;          -- beacon host
     port     = ZRE.DISCOVERY_PORT; -- beacon port
     logger   = LogLib.new('none',
-      require "log.writer.stdout".new(),
+      function(...) return o._private.log_writer(...) end,
       o:_formatter(require "log.formatter.concat".new())
-    )
+    );
+    log_writer = require "log.writer.stdout".new();
   }
 
   return o
@@ -646,9 +679,15 @@ end
 function Node:destroy()
   local p = self._private
   self:stop()
+
   if p.loop then
     p.loop:destroy()
     p.loop = nil
+  end
+
+  if p.outbox then
+    p.outbox:close()
+    p.outbox = nil
   end
 end
 
@@ -662,6 +701,11 @@ end
 
 function Node:set_log_level(lvl)
   self:logger().set_lvl(lvl)
+  return self
+end
+
+function Node:set_log_writer(writer)
+  self._private.log_writer = writer
   return self
 end
 
@@ -813,6 +857,11 @@ end
 
 function Node:beacon_port(v)
   return self._private.port
+end
+
+function Node:api_response(ok, err)
+  if ok then return self._private.pipe:send("1") end
+  return self._private.pipe:sendx("0", tostring(err))
 end
 
 function Node:send(...)
