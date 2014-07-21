@@ -12,7 +12,7 @@
 local function lyre_node_thread(pipe, outbox)
   local Node = require "lyre.impl.node"
 
-  local node = Node:new(pipe, outbox)
+  local node = Node.new(pipe, outbox)
 
   node:run()
   node:destroy()

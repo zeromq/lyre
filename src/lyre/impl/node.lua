@@ -21,9 +21,11 @@ local ztimer   = require "lzmq.timer"
 local zbeacon  = require "lzmq.beacon"
 local zthreads = require "lzmq.threads"
 local LogLib   = require "log"
+local ZRE      = require "lyre.zre"
+local Peer     = require "lyre.impl.peer"
 local UUID     = require "lyre.impl.uuid"
 local utils    = require "lyre.impl.utils"
-local ZRE      = require "lyre.zre"
+local Group    = require "lyre.impl.group"
 local Message  = require "lyre.impl.message"
 
 local bit            = utils.bit
@@ -32,210 +34,112 @@ local MessageDecoder = Message.decoder
 local MessageEncoder = Message.encoder
 
 ---------------------------------------------------------------------
-local Group = {} do
-Group.__index = Group
+local NODE_API do
 
-function Group:new(name)
-  local o = setmetatable({}, self)
-  o._private = {
-    name  = name;
-    peers = {};
-  }
-  return o
-end
+local API = {}
 
-function Group:destroy()
-end
-
-function Group:name()
-  return self._private.name
-end
-
-function Group:join(peer)
-  self._private.peers[peer:uuid()] = peer
-  peer:inc_status()
-  return peer
-end
-
-function Group:leave(peer)
-  self._private.peers[peer:uuid()] = nil
-  peer:inc_status()
-  return peer
-end
-
-function Group:send(msg)
-  for _, peer in pairs(self._private.peers) do
-    peer:send(msg)
-  end
-end
-
-end
----------------------------------------------------------------------
-
----------------------------------------------------------------------
-local Peer = {} do
-Peer.__index = Peer
-
-function Peer:new(node, uuid)
-  local o = setmetatable({}, self)
-  uuid = UUID.new(uuid)
-  o._private = {
-    node          = node;
-    uuid          = uuid;
-    name          = uuid:str():sub(1, 6);
-    version       = ZRE.VERSION;
-    sent_sequence = 0;
-    want_sequence = 1;
-    status        = 1;
-    headers       = {};
-  }
-  return o
-end
-
-function Peer:connect(node_uuid, endpoint)
-  assert(not self:connected())
-  local ctx = zmq.assert(zthreads.context())
-
-  local mailbox, err = ctx:socket{zmq.DEALER,
-    identity = '\001' .. node_uuid;
-    sndhwm   = PEER_EXPIRED * 100;
-    sndtimeo = 0;
-    connect  = endpoint;
-  }
-  if not mailbox then return nil, err end
-
-  self._private.mailbox    = mailbox;
-  self._private.endpoint   = endpoint;
-  self._private.evasive_at = ztimer.monotonic():start(PEER_EVASIVE)
-  self._private.expired_at = ztimer.monotonic():start(PEER_EXPIRED)
-
-  return self
-end
-
-function Peer:refresh()
-  self._private.evasive_at:start()
-  self._private.expired_at:start()
-end
-
-function Peer:evasive()
-  return self._private.evasive_at:rest() == 0
-end
-
-function Peer:expire()
-  return self._private.expired_at:rest() == 0
-end
-
-function Peer:send(msg)
-  local ok, err = msg:send(self, self._private.mailbox)
-  if not ok then
-    if err:name() == 'EAGAIN' then
-      self._private.node:remove_peer(self):disconnect()
-      return nil, err
-    end
-    zmq.assert(nil, err)
-  end
-
+API[ "SET NAME"       ] = function (self, pipe, name)
+  self:set_name(name)
   return true
 end
 
-function Peer:endpoint()
-  return self._private.endpoint or ""
+API[ "SET HEADER"     ] = function (self, pipe, name, value)
+  self:set_header(name, value)
+  return true
 end
 
-function Peer:version()
-  return self._private.version
+API[ "SET VERBOSE"    ] = function (self, pipe, level)
+  if level then self:set_log_level(level) end
+  return true
 end
 
-function Peer:next_sent_sequence(i)
-  local p = self._private
-  p.sent_sequence = bit.band(p.sent_sequence + (i or 1), 0xFFFF)
-  return p.sent_sequence
+API[ "SET LOG WRITER" ] = function (self, pipe, writer)
+  if not writer then return end
+  local loadstring = loadstring or load
+  writer = loadstring(writer) if not writer then return end
+  writer = writer()           if not writer then return end
+  self:set_log_writer(writer)
+  return true
 end
 
-function Peer:next_want_sequence(i)
-  local p = self._private
-  p.want_sequence = bit.band(p.want_sequence + (i or 1), 0xFFFF)
-  return p.want_sequence
+API[ "SET PORT"       ] = function (self, pipe, value)
+  value = tonumber(value)
+  if value then self:set_beacon_port(value) end
+  return true
 end
 
-function Peer:status()
-  return self._private.status
+API[ "SET HOST"       ] = function (self, pipe, value)
+  if value then self:set_beacon_host(value) end
+  return true
 end
 
-function Peer:set_status(v)
-  self._private.status = v
-  return self
+API[ "SET INTERVAL"   ] = function (self, pipe, value)
+  value = tonumber(value)
+  if value then self:set_beacon_interval(value) end
+  return true
 end
 
-function Peer:inc_status(i)
-  local p = self._private
-  p.status = bit.band(p.status + (i or 1), 0xFF)
-  return p.status
+API[ "UUID"           ] = function (self, pipe)
+  return self:api_response(self:uuid(true))
 end
 
-function Peer:ready()
-  return not not self._private.ready
+API[ "NAME"           ] = function (self, pipe)
+  return self:api_response(self:name())
 end
 
-function Peer:set_ready(v)
-  self._private.ready = v
+API[ "ENDPOINT"       ] = function (self, pipe)
+  return self:api_response(self:endpoint())
 end
 
-function Peer:connected()
-  return not not self._private.mailbox
+API[ "BIND"           ] = function (self, pipe, endpoint)
+  return self:api_response(self:bind(endpoint))
 end
 
-function Peer:name()
-  return self._private.name
+API[ "CONNECT"        ] = function (self, pipe, endpoint)
+  return self:api_response(self:connect(endpoint))
 end
 
-function Peer:set_name(name)
-  self._private.name = name
-  return self
+API[ "START"          ] = function (self, pipe)
+  return self:api_response(self:start())
 end
 
-function Peer:uuid(as_str)
-  if as_str then return self._private.uuid:str() end
-  return self._private.uuid:bin()
+API[ "STOP"           ] = function (self, pipe)
+  return self:api_response(self:stop())
 end
 
-function Peer:headers()
-  return self._private.headers
+API[ "WHISPER"        ] = function (self, pipe, identity, ...)
+  local ok, err = self:whisper(identity, ...)
+  return true
 end
 
-function Peer:set_header(k, v)
-  self._private.headers[k] = v
-  return self
+API[ "SHOUT"          ] = function (self, pipe, group, ...)
+  local ok, err = self:shout(group, ...)
+  return true
 end
 
-function Peer:header(k)
-  return self._private.headers[k]
+API[ "JOIN"           ] = function (self, pipe, group)
+  local ok, err = self:join(group)
+  return true
 end
 
-function Peer:disconnect()
-  if self:connected() then
-    local p = self._private
-    p.mailbox:close()
-    p.mailbox, p.endpoint, p.ready = nil
-  end
+API[ "LEAVE"          ] = function (self, pipe, group)
+  local ok, err = self:leave(group)
+  return true
 end
 
+API[ "$TERM"          ] = function (self, pipe)
+  local ok, err = self:interrupt()
+  return true
 end
----------------------------------------------------------------------
 
----------------------------------------------------------------------
-local Node_api_dispatch do
-
-local Node_api = {}
-
-function Node_api_dispatch(self, pipe, cmd, ...)
+function NODE_API(self, pipe, cmd, ...)
   local log = self:logger()
   if not cmd then
     log.error("Can not recv API command:", ...)
     return nil, ...
   end
 
-  local fn = Node_api[cmd]
+  local fn = API[cmd]
   if fn then
     log.debug("API start: ", cmd, ...)
     local ok, err = fn(self, pipe, ...)
@@ -252,107 +156,13 @@ function Node_api_dispatch(self, pipe, cmd, ...)
   return nil, 'Unknown command'
 end
 
-Node_api[ "SET NAME"     ] = function (self, pipe, name)
-  self:set_name(name)
-  return true
-end
-
-Node_api[ "SET HEADER"   ] = function (self, pipe, name, value)
-  self:set_header(name, value)
-  return true
-end
-
-Node_api[ "SET VERBOSE"  ] = function (self, pipe, level)
-  if level then self:set_log_level(level) end
-  return true
-end
-
-Node_api[ "SET LOG WRITER"] = function (self, pipe, writer)
-  if not writer then return end
-  local loadstring = loadstring or load
-  writer = loadstring(writer) if not writer then return end
-  writer = writer()           if not writer then return end
-  self:set_log_writer(writer)
-  return true
-end
-
-Node_api[ "SET PORT"     ] = function (self, pipe, value)
-  value = tonumber(value)
-  if value then self:set_beacon_port(value) end
-  return true
-end
-
-Node_api[ "SET HOST"     ] = function (self, pipe, value)
-  if value then self:set_beacon_host(value) end
-  return true
-end
-
-Node_api[ "SET INTERVAL" ] = function (self, pipe, value)
-  value = tonumber(value)
-  if value then self:set_beacon_interval(value) end
-  return true
-end
-
-Node_api[ "UUID"         ] = function (self, pipe)
-  return self:api_response(self:uuid(true))
-end
-
-Node_api[ "NAME"         ] = function (self, pipe)
-  return self:api_response(self:name())
-end
-
-Node_api[ "ENDPOINT"     ] = function (self, pipe)
-  return self:api_response(self:endpoint())
-end
-
-Node_api[ "BIND"         ] = function (self, pipe, endpoint)
-  return self:api_response(self:bind(endpoint))
-end
-
-Node_api[ "CONNECT"      ] = function (self, pipe, endpoint)
-  return self:api_response(self:connect(endpoint))
-end
-
-Node_api[ "START"        ] = function (self, pipe)
-  return self:api_response(self:start())
-end
-
-Node_api[ "STOP"         ] = function (self, pipe)
-  return self:api_response(self:stop())
-end
-
-Node_api[ "WHISPER"      ] = function (self, pipe, identity, ...)
-  local ok, err = self:whisper(identity, ...)
-  return true
-end
-
-Node_api[ "SHOUT"        ] = function (self, pipe, group, ...)
-  local ok, err = self:shout(group, ...)
-  return true
-end
-
-Node_api[ "JOIN"         ] = function (self, pipe, group)
-  local ok, err = self:join(group)
-  return true
-end
-
-Node_api[ "LEAVE"        ] = function (self, pipe, group)
-  local ok, err = self:leave(group)
-  return true
-end
-
-Node_api[ "$TERM"        ] = function (self, pipe)
-  local ok, err = self:interrupt()
-  return true
-end
-
 end
 ---------------------------------------------------------------------
 
 ---------------------------------------------------------------------
-local Node_on_message = {} do
+local NODE_MESSAGE = {} do
 
-function Node_on_message.beacon(node, version, uuid, host, port)
+NODE_MESSAGE[ "beacon"  ] = function(node, version, uuid, host, port)
   local log  = node:logger()
   if port > 0 then
     local endpoint = "tcp://" .. host .. ":" .. port
@@ -365,7 +175,7 @@ function Node_on_message.beacon(node, version, uuid, host, port)
   if peer then self:remove_peer(peer):disconnect() end
 end
 
-function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
+NODE_MESSAGE[ "HELLO"   ] = function(node, version, uuid, sequence, endpoint, groups, status, name, headers)
   local log  = node:logger()
 
   if sequence ~= 1 then
@@ -377,8 +187,11 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
     return
   end
 
-  -- @todo check error
-  local peer = assert(node:require_peer(uuid, endpoint))
+  local peer, err = node:require_peer(uuid, endpoint)
+  if not peer then
+    log.alert("Can not create peer:", UUID.to_string(uuid), " ", name, " ", endpoint)
+    return
+  end
 
   if peer:ready() then
     log.alert("Get duplicate HELLO messge from ", peer:uuid(true), " ", name, " ", endpoint)
@@ -393,8 +206,6 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
   for key, val in pairs(headers) do
     peer:set_header(key, val)
   end
-
-  local headers = 
 
   -- Tell the caller about the peer
   node:send("ENTER", peer:uuid(true), peer:name(), 
@@ -411,58 +222,41 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
   peer:set_ready(true)
 end
 
-local function find_peer(node, version, uuid, sequence)
-  local log  = node:logger()
-  local peer = node:find_peer(uuid)
-  if not peer then
-    log.warning("Unknown peer: ", UUID.to_string(uuid))
-    return
-  end
-
-  if peer:next_want_sequence() ~= sequence then
-    node:remove_peer(peer):disconnect()
-    log.warning("Invalid message sequence. Expected ", peer:next_want_sequence(0), " Got:", sequence)
-    return
-  end
-
-  return peer
-end
-
-function Node_on_message.PING(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "PING"    ] = function(node, version, uuid, sequence)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
   peer:send(MessageEncoder.PING_OK(node))
 end
 
-function Node_on_message.PING_OK(node, version, uuid, sequence)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "PING_OK" ] = function(node, version, uuid, sequence)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 end
 
-function Node_on_message.JOIN(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "JOIN"    ] = function(node, version, uuid, sequence, group, status)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
   node:join_peer_group(peer, group)
 end
 
-function Node_on_message.LEAVE(node, version, uuid, sequence, group, status)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "LEAVE"   ] = function(node, version, uuid, sequence, group, status)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
   node:leave_peer_group(peer, group)
 end
 
-function Node_on_message.SHOUT(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "SHOUT"   ] = function(node, version, uuid, sequence, group, content)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
   node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
 end
 
-function Node_on_message.WHISPER(node, version, uuid, sequence, group, content)
-  local peer = find_peer(node, version, uuid, sequence)
+NODE_MESSAGE[ "WHISPER" ] = function(node, version, uuid, sequence, group, content)
+  local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
   node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
@@ -514,7 +308,7 @@ local function Node_on_interval(self)
 end
 
 local function Node_on_command(self, pipe)
-  return Node_api_dispatch(self, pipe, pipe:recvx())
+  return NODE_API(self, pipe, pipe:recvx())
 end
 
 function Node:new(pipe, outbox)
@@ -673,7 +467,7 @@ function Node:run()
 end
 
 function Node:on_message(msg, ...)
-  Node_on_message[msg](self, ...)
+  NODE_MESSAGE[msg](self, ...)
 end
 
 function Node:destroy()
@@ -744,7 +538,7 @@ end
 
 function Node:join_peer_group(peer, name)
   local p = self._private
-  local group = p.peer_groups[name] or Group:new(name)
+  local group = p.peer_groups[name] or Group.new(name)
   p.peer_groups[name] = group
   group:join(peer)
 
@@ -780,7 +574,7 @@ function Node:require_peer(uuid, endpoint)
 
     local err
 
-    peer, err = Peer:new(self, uuid)
+    peer, err = Peer.new(self, uuid)
     if not peer then
       print("Error:", err)
       return nil, err
@@ -804,6 +598,24 @@ end
 function Node:find_peer(uuid)
   local peer = self._private.peers[uuid]
   if peer then peer:refresh() end
+  return peer
+end
+
+function Node:check_peer(version, uuid, sequence)
+  local log  = self:logger()
+  local peer = self:find_peer(uuid)
+  if not peer then
+    log.warning("Unknown peer: ", UUID.to_string(uuid))
+    return
+  end
+
+  if peer:next_want_sequence() ~= sequence then
+    local seq = peer:next_want_sequence(0)
+    self:remove_peer(peer):disconnect()
+    log.warning("Invalid message sequence. Expected ", seq, " Got:", sequence)
+    return
+  end
+
   return peer
 end
 
@@ -860,7 +672,12 @@ function Node:beacon_port(v)
 end
 
 function Node:api_response(ok, err)
-  if ok then return self._private.pipe:send("1") end
+  if ok then 
+    if type(ok) == 'string' then
+      return self._private.pipe:send(ok)
+    end
+    return self._private.pipe:send("1")
+  end
   return self._private.pipe:sendx("0", tostring(err))
 end
 
@@ -919,4 +736,6 @@ end
 end
 ---------------------------------------------------------------------
 
-return Node
+return {
+  new = function(...) return Node:new(...) end;
+}
