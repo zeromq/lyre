@@ -121,8 +121,15 @@ function Node:set_header(key, value)
   return self
 end
 
-function Node:set_verbose()
-  self:_send("SET VERBOSE")
+function Node:set_verbose(lvl)
+  lvl = lvl or 'trace'
+  self:_send("SET VERBOSE", lvl)
+  return self
+end
+
+function Node:set_log_writer(writer)
+  assert(type(writer) == "string")
+  self:_send("SET LOG WRITER", writer)
   return self
 end
 

@@ -245,8 +245,18 @@ Node_api[ "SET HEADER"   ] = function (self, pipe, name, value)
   return true
 end
 
-Node_api[ "SET VERBOSE"  ] = function (self, pipe)
-  self:set_log_level("trace")
+Node_api[ "SET VERBOSE"  ] = function (self, pipe, level)
+  if not level then return end
+  self:set_log_level(level)
+  return true
+end
+
+Node_api[ "SET LOG WRITER"] = function (self, pipe, writer)
+  if not writer then return end
+  local loadstring = loadstring or load
+  writer = loadstring(writer) if not writer then return end
+  writer = writer()           if not writer then return end
+  self:set_log_writer(writer)
   return true
 end
 
@@ -525,9 +535,10 @@ function Node:new(pipe, outbox)
     host     = LYRE_MYIP;          -- beacon host
     port     = ZRE.DISCOVERY_PORT; -- beacon port
     logger   = LogLib.new('none',
-      require "log.writer.stdout".new(),
+      function(...) return o._private.log_writer(...) end,
       o:_formatter(require "log.formatter.concat".new())
-    )
+    );
+    log_writer = require "log.writer.stdout".new();
   }
 
   return o
@@ -671,6 +682,11 @@ end
 
 function Node:set_log_level(lvl)
   self:logger().set_lvl(lvl)
+  return self
+end
+
+function Node:set_log_writer(writer)
+  self._private.log_writer = writer
   return self
 end
 
