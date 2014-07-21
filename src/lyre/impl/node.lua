@@ -216,7 +216,7 @@ function Peer:disconnect()
   if self:connected() then
     local p = self._private
     p.mailbox:close()
-    p.mailbox, p.uuid, p.endpoint, p.ready = nil
+    p.mailbox, p.endpoint, p.ready = nil
   end
 end
 
@@ -346,6 +346,17 @@ end
 
 function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, status, name, headers)
   local log  = node:logger()
+
+  if sequence ~= 1 then
+    log.alert("Get HELLO with seq: ",sequence, " from", UUID.to_string(uuid), " ", name, " ", endpoint)
+    peer = node:find_peer(uuid)
+    if peer then
+      node:remove_peer(peer):disconnect()
+    end
+    return
+  end
+
+  -- @todo check error
   local peer = assert(node:require_peer(uuid, endpoint))
 
   if peer:ready() then
@@ -353,8 +364,6 @@ function Node_on_message.HELLO(node, version, uuid, sequence, endpoint, groups, 
     node:remove_peer(peer):disconnect()
     return
   end
-
-  if sequence ~= 1 then return end
 
   peer
     :set_status(status)

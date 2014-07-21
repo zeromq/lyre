@@ -241,8 +241,7 @@ end
 
 local Message = {}
 
-Message.encoder   = MessageEncoder
-Message.decoder   = MessageDecoder
-Message.processor = MessageProcessor
+Message.encoder = MessageEncoder
+Message.decoder = MessageDecoder
 
 return Message
