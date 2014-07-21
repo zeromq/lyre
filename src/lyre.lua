@@ -10,16 +10,12 @@
 
 ---------------------------------------------------------------------
 local function lyre_node_thread(pipe, outbox)
-  local zmq  = require "lzmq"
-  local zth  = require "lzmq.threads"
   local Node = require "lyre.impl.node"
 
-  outbox = zmq.assert(zth.context():socket{zmq.PAIR, connect = outbox})
   local node = Node:new(pipe, outbox)
 
   node:run()
   node:destroy()
-  outbox:destroy()
 end
 ---------------------------------------------------------------------
 

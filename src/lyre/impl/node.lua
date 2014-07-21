@@ -509,6 +509,8 @@ end
 function Node:new(pipe, outbox)
   local ctx = zmq.assert(zthreads.context())
 
+  outbox = zmq.assert(ctx:socket{zmq.PAIR, connect = outbox})
+
   local uuid = UUID.new()
 
   local LYRE_MYIP = LYRE_MYIP or os.getenv("LYRE_MYIP")
@@ -666,9 +668,15 @@ end
 function Node:destroy()
   local p = self._private
   self:stop()
+
   if p.loop then
     p.loop:destroy()
     p.loop = nil
+  end
+
+  if p.outbox then
+    p.outbox:close()
+    p.outbox = nil
   end
 end
 
