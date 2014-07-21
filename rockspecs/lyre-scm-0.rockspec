@@ -32,9 +32,11 @@ build = {
   modules = {
     ["lyre"              ] = "src/lyre.lua";
     ["lyre.zre"          ] = "src/lyre/zre.lua";
+    ["lyre.impl.peer"    ] = "src/lyre/impl/peer.lua";
     ["lyre.impl.uuid"    ] = "src/lyre/impl/uuid.lua";
     ["lyre.impl.node"    ] = "src/lyre/impl/node.lua";
     ["lyre.impl.utils"   ] = "src/lyre/impl/utils.lua";
+    ["lyre.impl.group"   ] = "src/lyre/impl/group.lua";
     ["lyre.impl.message" ] = "src/lyre/impl/message.lua";
   },
 }
