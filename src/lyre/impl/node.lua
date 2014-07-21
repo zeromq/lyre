@@ -229,9 +229,26 @@ local Node_api_dispatch do
 local Node_api = {}
 
 function Node_api_dispatch(self, pipe, cmd, ...)
-  if not cmd then return nil, ... end
+  local log = self:logger()
+  if not cmd then
+    log.error("Can not recv API command:", ...)
+    return nil, ...
+  end
+
   local fn = Node_api[cmd]
-  if fn then return fn(self, pipe, ...) end
+  if fn then
+    log.debug("API start: ", cmd, ...)
+    local ok, err = fn(self, pipe, ...)
+    if not ok then
+      log.error("API error: ", cmd, " - ", err)
+    else
+      log.debug("API done : ", cmd)
+    end
+    return ok, err
+  end
+
+  log.alert("Recv unknown API command: ", api, ...)
+
   return nil, 'Unknown command'
 end
 
@@ -246,8 +263,7 @@ Node_api[ "SET HEADER"   ] = function (self, pipe, name, value)
 end
 
 Node_api[ "SET VERBOSE"  ] = function (self, pipe, level)
-  if not level then return end
-  self:set_log_level(level)
+  if level then self:set_log_level(level) end
   return true
 end
 
@@ -278,36 +294,31 @@ Node_api[ "SET INTERVAL" ] = function (self, pipe, value)
 end
 
 Node_api[ "UUID"         ] = function (self, pipe)
-  return pipe:send(self:uuid(true))
+  return self:api_response(self:uuid(true))
 end
 
 Node_api[ "NAME"         ] = function (self, pipe)
-  return pipe:send(self:name())
+  return self:api_response(self:name())
 end
 
 Node_api[ "ENDPOINT"     ] = function (self, pipe)
-  return pipe:send(self:endpoint())
+  return self:api_response(self:endpoint())
 end
 
 Node_api[ "BIND"         ] = function (self, pipe, endpoint)
-  local ok, err = self:bind(endpoint)
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:bind(endpoint))
 end
 
 Node_api[ "CONNECT"      ] = function (self, pipe, endpoint)
-  local ok, err = self:connect(endpoint)
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:connect(endpoint))
 end
 
 Node_api[ "START"        ] = function (self, pipe)
-  local ok, err = self:start()
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:start())
 end
 
 Node_api[ "STOP"         ] = function (self, pipe)
-  local ok, err = self:stop()
-  
-  return pipe:send( ok and "1" or "0")
+  return self:api_response(self:stop())
 end
 
 Node_api[ "WHISPER"      ] = function (self, pipe, identity, ...)
@@ -846,6 +857,11 @@ end
 
 function Node:beacon_port(v)
   return self._private.port
+end
+
+function Node:api_response(ok, err)
+  if ok then return self._private.pipe:send("1") end
+  return self._private.pipe:sendx("0", tostring(err))
 end
 
 function Node:send(...)

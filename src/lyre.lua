@@ -150,14 +150,14 @@ function Node:start()
   self:_send("START")
   local ok, err = self:_recv()
   if not ok then return nil, err end
-  return ok == "1"
+  return ok == "1", err
 end
 
 function Node:stop()
   self:_send("STOP")
   local ok, err = self:_recv()
   if not ok then return nil, err end
-  return ok == "1"
+  return ok == "1", err
 end
 
 function Node:join(group)
