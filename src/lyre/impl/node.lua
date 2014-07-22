@@ -474,6 +474,7 @@ function Node:stop()
   if p.beacon then
     ztimer.sleep(1000)
     p.beacon:destroy()
+    p.beacon = nil
   end
 
   return self
@@ -487,8 +488,13 @@ function Node:on_message(msg, ...)
   NODE_MESSAGE[msg](self, ...)
 end
 
+function Node:interrupt()
+  return self._private.loop:interrupt()
+end
+
 function Node:destroy()
   local p = self._private
+
   self:stop()
 
   if p.loop then

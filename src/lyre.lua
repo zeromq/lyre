@@ -184,7 +184,7 @@ function Node:destroy()
   local actor = self._private.actor
   if actor then
     actor:sendx("$TERM")
-    actor:join()
+    actor:close()
     self._private.actor = nil
   end
 end
