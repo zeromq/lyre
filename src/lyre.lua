@@ -9,10 +9,12 @@
 --
 
 ---------------------------------------------------------------------
-local function lyre_node_thread(pipe, outbox)
+local function lyre_node_thread(pipe, outbox, name)
   local Node = require "lyre.impl.node"
 
   local node = Node.new(pipe, outbox)
+
+  if name then node:set_name(name) end
 
   node:run()
   node:destroy()
@@ -43,13 +45,17 @@ end
 local Node = {} do
 Node.__index = Node
 
-function Node:new(ctx)
+function Node:new(ctx, name)
+  if type(ctx) == "string" then
+    name, ctx = ctx
+  end
+
   if not ctx then ctx = zth.context() end
 
   local inbox, endpoind = make_pipe(ctx)
   if not inbox then return nil, endpoind end
   
-  local actor = zth.actor(ctx, lyre_node_thread, endpoind)
+  local actor = zth.actor(ctx, lyre_node_thread, endpoind, name)
 
   local ok, err = actor:start()
   if not ok then 
@@ -104,12 +110,6 @@ function Node:name()
     self._private.name = self:_recv()
   end
   return self._private.name
-end
-
-function Node:set_name(name)
-  self._private.name = nil
-  self:_send("SET NAME", name)
-  return self
 end
 
 function Node:set_header(key, value)

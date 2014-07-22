@@ -38,11 +38,6 @@ local NODE_API do
 
 local API = {}
 
-API[ "SET NAME"       ] = function (self, pipe, name)
-  self:set_name(name)
-  return true
-end
-
 API[ "SET HEADER"     ] = function (self, pipe, name, value)
   self:set_header(name, value)
   return true
