@@ -16,12 +16,11 @@ if not name then
   os.exit(-1)
 end
 
-local node = Lyre.Node()
+local node = Lyre.Node(name)
   :set_log_writer([[
     return require"log.writer.console.color".new()
   ]])
   :set_verbose("info")
-  :set_name(name)
   :join("CHAT")
 
 if interface then

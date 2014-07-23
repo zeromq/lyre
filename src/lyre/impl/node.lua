@@ -257,18 +257,18 @@ NODE_MESSAGE[ "LEAVE"   ] = function(node, version, uuid, sequence, group, statu
   end
 end
 
-NODE_MESSAGE[ "SHOUT"   ] = function(node, version, uuid, sequence, group, content)
+NODE_MESSAGE[ "SHOUT"   ] = function(node, version, uuid, sequence, group, ...)
   local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
-  node:send("SHOUT", peer:uuid(true), peer:name(), group, unpack(content))
+  node:send("SHOUT", peer:uuid(true), peer:name(), group, ...)
 end
 
-NODE_MESSAGE[ "WHISPER" ] = function(node, version, uuid, sequence, content)
+NODE_MESSAGE[ "WHISPER" ] = function(node, version, uuid, sequence, ...)
   local peer = node:check_peer(version, uuid, sequence)
   if not peer then return end
 
-  node:send("WHISPER", peer:uuid(true), peer:name(), unpack(content))
+  node:send("WHISPER", peer:uuid(true), peer:name(), ...)
 end
 
 end
@@ -284,16 +284,8 @@ local function Node_on_beacon(self, beacon)
   return MessageDecoder.beacon(self, host, ann)
 end
 
-local function wrap_msg(a, b, ...)
-  return a, b, {...}
-end
-
 local function Node_on_inbox(self, inbox)
-  local routing_id, msg, content = wrap_msg(inbox:recvx())
-  if not routing_id              then return end
-  if not msg                     then return end
-
-  return MessageDecoder.dispatch(self, routing_id, msg, content)
+  return MessageDecoder.dispatch(self, inbox:recvx())
 end
 
 local function Node_on_interval(self)
@@ -708,19 +700,19 @@ function Node:send(...)
   return self._private.outbox:sendx(...)
 end
 
-function Node:shout(name, content)
+function Node:shout(name, ...)
   local p = self._private
   local group = p.peer_groups[name]
   if not group then return true end
-  local msg = MessageEncoder.SHOUT(self, group:name(), content)
+  local msg = MessageEncoder.SHOUT(self, group:name(), ...)
   return group:send(msg)
 end
 
-function Node:whisper(uuid, content)
+function Node:whisper(uuid, ...)
   local p = self._private
   local peer = p.peers[uuid]
   if not peer then return true end
-  local msg = MessageEncoder.WHISPER(self, content)
+  local msg = MessageEncoder.WHISPER(self, ...)
   return peer:send(msg)
 end
 
