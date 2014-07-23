@@ -12,11 +12,10 @@ local UUID     = require "lyre.impl.uuid"
 local utils    = require "lyre.impl.utils"
 local ZRE      = require "lyre.zre"
 
-local bit      = utils.bit
-local Iter     = utils.Iter
-local Buffer   = utils.Buffer
-local count    = utils.count
-local unpack   = utils.unpack
+local bit        = utils.bit
+local Iter       = utils.Iter
+local Buffer     = utils.Buffer
+local count      = utils.count
 
 local STRUCT, BIG_ENDIAN, BYTES  = utils.STRUCT, utils.BIG_ENDIAN, utils.BYTES
 local UINT8,  UINT16,     UINT32 = utils.UINT8,  utils.UINT16,     utils.UINT32
@@ -47,7 +46,10 @@ local LEAVE_HEADER   = STRUCT{BIG_ENDIAN, STRING, UINT8}
 local Message = {} do
 Message.__index = Message
 
-function Message:new(id, header, content)
+function Message:new(id, header, ...)
+  local content = ...
+  if select("#", ...) > 1 then content = {...} end
+
   return setmetatable({
     _id      = id,
     _header  = header,
@@ -56,7 +58,7 @@ function Message:new(id, header, content)
 end
 
 function Message:send(peer, s)
-  local header = Buffer():write(">c0BBI2",
+  local header = Buffer():write(MESSAGE_HEADER,
     ZRE.SIGNATURE, self._id,
     peer:version(),
     peer:next_sent_sequence()
@@ -130,15 +132,15 @@ function MessageEncoder.LEAVE(node, group)
   return Message:new(ZRE.COMMANDS.LEAVE, buf:data())
 end
 
-function MessageEncoder.SHOUT(node, group, content)
+function MessageEncoder.SHOUT(node, group, ...)
   local buf = Buffer()
     :write_string(group)
 
-  return Message:new(ZRE.COMMANDS.SHOUT, buf:data(), content)
+  return Message:new(ZRE.COMMANDS.SHOUT, buf:data(), ...)
 end
 
-function MessageEncoder.WHISPER(node, content)
-  return Message:new(ZRE.COMMANDS.WHISPER, nil, content)
+function MessageEncoder.WHISPER(node, ...)
+  return Message:new(ZRE.COMMANDS.WHISPER, nil, ...)
 end
 
 end
@@ -147,10 +149,14 @@ end
 ---------------------------------------------------------------------
 local MessageDecoder = {} do
 
-function MessageDecoder.dispatch(node, routing_id, msg, content)
+function MessageDecoder.dispatch(node, routing_id, msg, ...)
   local log = node:logger()
 
-  if #routing_id ~= UUID.LEN + 1 then return end
+  if not routing_id                then return end
+  if not msg                       then return end
+  if #routing_id ~= UUID.LEN + 1   then return end
+  if routing_id:sub(1,1) ~= '\001' then return end
+
   local uuid = routing_id:sub(2)
 
   local iter = Iter(msg)
@@ -169,7 +175,7 @@ function MessageDecoder.dispatch(node, routing_id, msg, content)
   log.notice("INBOX : ", UUID.to_string(uuid), name, "#", sequence)
 
   local fn = MessageDecoder[name]
-  if fn then fn(node, version, uuid, sequence, iter, content) end
+  if fn then fn(node, version, uuid, sequence, iter, ...) end
 end
 
 function MessageDecoder.beacon(node, host, ann)
@@ -226,14 +232,14 @@ function MessageDecoder.LEAVE(node, version, uuid, sequence, iter)
   return node:on_message("LEAVE", version, uuid, sequence, group, status)
 end
 
-function MessageDecoder.SHOUT(node, version, uuid, sequence, iter, content)
+function MessageDecoder.SHOUT(node, version, uuid, sequence, iter, ...)
   local group = iter:next_string() if not group then return end
 
-  return node:on_message("SHOUT", version, uuid, sequence, group, content)
+  return node:on_message("SHOUT", version, uuid, sequence, group, ...)
 end
 
-function MessageDecoder.WHISPER(node, version, uuid, sequence, iter, content)
-  return node:on_message("WHISPER", version, uuid, sequence, content)
+function MessageDecoder.WHISPER(node, version, uuid, sequence, iter, ...)
+  return node:on_message("WHISPER", version, uuid, sequence, ...)
 end
 
 end
