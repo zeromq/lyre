@@ -74,14 +74,14 @@ function Message:send(peer, s)
     return s:send(header)
   end
 
-  local ok, err = s:send_more(header)
-  if not ok then return nil, err end
-
   if type(self._content) == "string" then
-    return s:send(self._content)
+    return s:sendx(header, self._content)
   end
 
   assert(type(self._content) == "table")
+
+  local ok, err = s:send_more(header)
+  if not ok then return nil, err end
   return s:send_all(self._content)
 end
 
@@ -172,7 +172,7 @@ function MessageDecoder.dispatch(node, routing_id, msg, ...)
     return
   end
 
-  log.notice("INBOX : ", UUID.to_string(uuid), name, "#", sequence)
+  log.notice("INBOX : ", UUID.to_string(uuid), " ", name, " #", sequence)
 
   local fn = MessageDecoder[name]
   if fn then fn(node, version, uuid, sequence, iter, ...) end

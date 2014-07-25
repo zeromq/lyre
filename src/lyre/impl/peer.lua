@@ -79,7 +79,7 @@ end
 function Peer:send(msg)
   local ok, err = msg:send(self, self._private.mailbox)
   if not ok then
-    if err:name() == 'EAGAIN' then
+    if err:mnemo() == 'EAGAIN' then
       self._private.node:remove_peer(self):disconnect()
       return nil, err
     end
